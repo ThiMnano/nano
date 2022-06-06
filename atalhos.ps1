@@ -272,8 +272,8 @@ $oldpower.Add_Click({
 $temp.Add_Click({
     Write-Host "Limpando Arquivos temporarios"
     Import-Module BitsTransfer
-    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Windows\Temp\limpeza_temps.bat
-    Start-Process "cmd.exe"  "/c C:\Windows\Temp\limpeza_temps.bat"
+    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Users\%USERNAME%\AppData\Local\Limpeza\limpeza_temps.bat
+    Start-Process "cmd.exe"  "/c C:\Users\%USERNAME%\AppData\Local\Limpeza\limpeza_temps.bat"
 })
 
 $clean.Add_Click({
