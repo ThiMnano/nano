@@ -119,12 +119,12 @@ $oldcontrolpanel.height          = 30
 $oldcontrolpanel.location        = New-Object System.Drawing.Point(247,72)
 $oldcontrolpanel.Font            = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
-$temp      			             = New-Object system.Windows.Forms.Button
-$temp.text    			         = "Limpeza de Temp's"
-$temp.width    			         = 211
-$temp.height   			         = 30
-$temp.location   		         = New-Object System.Drawing.Point(247,107)
-$temp.Font         			     = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$temp      			 = New-Object system.Windows.Forms.Button
+$temp.text    			 = "Limpeza de Temp's"
+$temp.width    			 = 211
+$temp.height   			 = 30
+$temp.location   		 = New-Object System.Drawing.Point(247,107)
+$temp.Font         		 = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $oldpower                        = New-Object system.Windows.Forms.Button
 $oldpower.text                   = "Plano de Energia"
@@ -189,7 +189,7 @@ $temp.Add_Click({
     $ResultText.text += "`r`n" +"Limpando Arquivos temporarios"
     Import-Module BitsTransfer
     Start-BitsTransfer -Source "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat" -Destination limpeza.bat
-    ./limpeza.bat
+    cmd /c ./limpeza.bat
 })
 
 $clean.Add_Click({
