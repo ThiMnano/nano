@@ -185,7 +185,11 @@ $oldpower.Add_Click({
 })
 
 $temp.Add_Click({
-	C:\Users\User\Desktop\limpeza de temps.bat -ExecutionPolicy
+    Write-Host "Limpando Arquivos temporarios"
+    $ResultText.text += "`r`n" +"Limpando Arquivos temporarios"
+    Import-Module BitsTransfer
+    Start-BitsTransfer -Source "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat" -Destination limpeza.bat
+    ./limpeza.bat
 })
 
 $clean.Add_Click({
