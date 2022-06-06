@@ -84,10 +84,10 @@ $Impressoras.height              = 30
 $Impressoras.location            = New-Object System.Drawing.Point(2,107)
 $Impressoras.Font                = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
-$pastas             		     = New-Object system.Windows.Forms.Button
-$pastas.text          		     = "Opcoes de pastas"
+$pastas             		 = New-Object system.Windows.Forms.Button
+$pastas.text          		 = "Opcoes de pastas"
 $pastas.width       	         = 212
-$pastas.height     		         = 30
+$pastas.height     		 = 30
 $pastas.location    	         = New-Object System.Drawing.Point(2,142)
 $pastas.Font        	         = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
@@ -189,7 +189,7 @@ $temp.Add_Click({
     $ResultText.text += "`r`n" +"Limpando Arquivos temporarios"
     Import-Module BitsTransfer
     Start-BitsTransfer -Source "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat" -Destination limpeza.bat
-    cmd ./limpeza.bat
+    cmd /c "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat"
 })
 
 $clean.Add_Click({
