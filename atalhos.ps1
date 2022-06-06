@@ -121,7 +121,7 @@ $oldcontrolpanel.Font            = New-Object System.Drawing.Font('Microsoft San
 
 $temp      			 = New-Object system.Windows.Forms.Button
 $temp.text    			 = "Limpeza de Temp's"
-$temp.width    			 = 211
+$temp.width		         = 211
 $temp.height   			 = 30
 $temp.location   		 = New-Object System.Drawing.Point(247,107)
 $temp.Font         		 = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
@@ -186,10 +186,9 @@ $oldpower.Add_Click({
 
 $temp.Add_Click({
     Write-Host "Limpando Arquivos temporarios"
-    $ResultText.text += "`r`n" +"Limpando Arquivos temporarios"
     Import-Module BitsTransfer
-    Start-BitsTransfer -Source "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat" -Destination "C:\Windows\Temp\limpeza.bat"
-    cmd C:\Windows\Temp\limpeza.bat
+    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Windows\Temp\limpeza_temps.bat
+    Start-Process "cmd.exe"  "/c C:\Windows\Temp\limpeza_temps.bat"
 })
 
 $clean.Add_Click({
