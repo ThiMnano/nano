@@ -60,7 +60,7 @@ $Label2.location                 = New-Object System.Drawing.Point(125,0)
 $Label2.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',24,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
 
 $Panel1                          = New-Object system.Windows.Forms.Panel
-$Panel1.height                   = 450
+$Panel1.height                   = 485
 $Panel1.width                    = 463
 $Panel1.location                 = New-Object System.Drawing.Point(4,4)
 
@@ -156,15 +156,78 @@ $Label3.height                   = 45
 $Label3.location                 = New-Object System.Drawing.Point(125,265)
 $Label3.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',24,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
 
-$nano                           = New-Object system.Windows.Forms.Button
-$nano.text                      = "Nano Debug"
-$nano.width                     = 211
-$nano.height                    = 30
-$nano.location                  = New-Object System.Drawing.Point(2,310)
-$nano.Font                      = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$nano                            = New-Object system.Windows.Forms.Button
+$nano.text                       = "Nano Debug"
+$nano.width                      = 211
+$nano.height                     = 30
+$nano.location                   = New-Object System.Drawing.Point(2,310)
+$nano.Font                       = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$NFE                             = New-Object system.Windows.Forms.Button         
+$NFE.text                        = "NF-e"
+$NFE.width                       = 211
+$NFE.height                      = 30
+$NFE.location                    = New-Object System.Drawing.Point(2,345)
+$NFE.Font                        = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$NFSE                            = New-Object system.Windows.Forms.Button         
+$NFSE.text                       = "NFS-e"
+$NFSE.width                      = 211
+$NFSE.height                     = 30
+$NFSE.location                   = New-Object System.Drawing.Point(2,380)
+$NFSE.Font                       = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$NFCE                            = New-Object system.Windows.Forms.Button         
+$NFCE.text                       = "NFC-e"
+$NFCE.width                      = 211
+$NFCE.height                     = 30
+$NFCE.location                   = New-Object System.Drawing.Point(2,415)
+$NFCE.Font                       = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$Boleto                          = New-Object system.Windows.Forms.Button         
+$Boleto.text                     = "Nano Boleto"
+$Boleto.width                    = 211
+$Boleto.height                   = 30
+$Boleto.location                 = New-Object System.Drawing.Point(2,450)
+$Boleto.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$nanorar                         = New-Object system.Windows.Forms.Button
+$nanorar.text                    = "Nano.rar"
+$nanorar.width                   = 211
+$nanorar.height                  = 30
+$nanorar.location                = New-Object System.Drawing.Point(247,310)
+$nanorar.Font                    = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$setupnano                       = New-Object system.Windows.Forms.Button         
+$setupnano.text                  = "Nano Instalador"
+$setupnano.width                 = 211
+$setupnano.height                = 30
+$setupnano.location              = New-Object System.Drawing.Point(247,345)
+$setupnano.Font                  = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$crytal                          = New-Object system.Windows.Forms.Button         
+$crytal.text                     = "Crystal"
+$crytal.width                    = 211
+$crytal.height                   = 30
+$crytal.location                 = New-Object System.Drawing.Point(247,380)
+$crytal.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$sql                             = New-Object system.Windows.Forms.Button         
+$sql.text                        = "SQL"
+$sql.width                       = 211
+$sql.height                      = 30
+$sql.location                    = New-Object System.Drawing.Point(247,415)
+$sql.Font                        = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$winrar                          = New-Object system.Windows.Forms.Button         
+$winrar.text                     = "Winrar"
+$winrar.width                    = 211
+$winrar.height                   = 30
+$winrar.location                 = New-Object System.Drawing.Point(247,450)
+$winrar.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $Form.controls.AddRange(@($Panel1))
-$Panel1.controls.AddRange(@($Label2,$Programas,$Firewall,$gestor,$Impressoras,$pastas,$internet,$sistema,$ncpa,$oldcontrolpanel,$oldpower,$temp,$clean,$Label3,$nano))
+$Panel1.controls.AddRange(@($Label2,$Programas,$Firewall,$gestor,$Impressoras,$pastas,$internet,$sistema,$ncpa,$oldcontrolpanel,$oldpower,$temp,$clean,$Label3,$nano,$NFE,$NFSE,$NFCE,$Boleto,$nanorar,$setupnano,$crytal,$sql,$winrar))
 
 $Programas.Add_Click({
 	cmd /c appwiz.cpl
@@ -220,5 +283,42 @@ $clean.Add_Click({
 $nano.Add_Click({
     Start-Process "https://www.dropbox.com/s/1yqtnsagjzx16sk/Debug.rar?dl=1"
 })
+
+$NFE.Add_Click({
+    Start-Process "https://www.dropbox.com/s/ntqx107lqxrc3fl/NANONFe.rar?dl=1"
+})
+
+$NFSE.Add_Click({
+    Start-Process "https://www.dropbox.com/s/tv96cbx4s5f2z69/NANONFSe.zip?dl=1"
+})
+
+$NFCE.Add_Click({
+    Start-Process "https://www.dropbox.com/s/hx9o0emp7c4dk5j/NANONFCe.rar?dl=1"
+})
+
+$Boleto.Add_Click({
+    Start-Process "https://www.dropbox.com/s/7xq58imdofkepx2/NANOBoleto.rar?dl=1"
+})
+
+$nanorar.Add_Click({
+    Start-Process "https://www.dropbox.com/s/y122n3n2ot5qw8y/NANO.rar?dl=1"
+})
+
+$setupnano.Add_Click({
+    Start-Process "https://www.dropbox.com/s/63fzce1uxysm99l/Nano%20Instalador.exe?dl=1	"
+})
+
+$crytal.Add_Click({
+    Start-Process "https://www.dropbox.com/s/f0iq5hsk6thyrtz/CRRuntime_32bit_13_0_18.msi?dl=1"
+})
+
+$sql.Add_Click({
+    Start-Process "https://www.dropbox.com/s/ty5ji3b5rl5o1ns/Programas.rar?dl=1"
+})
+
+$winrar.Add_Click({
+    Start-Process "https://www.win-rar.com/download.html?&L=9"
+})
+
 
 [void]$Form.ShowDialog()
