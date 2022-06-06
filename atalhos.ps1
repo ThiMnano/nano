@@ -51,98 +51,120 @@ $Form.Icon                       = [System.Drawing.Icon]::FromHandle((New-Object
 $Form.Width                      = $objImage.Width
 $Form.Height                     = $objImage.Height
 
+$Label2                          = New-Object system.Windows.Forms.Label
+$Label2.text                     = "UTILITARIOS"
+$Label2.AutoSize                 = $True
+$Label2.width                    = 463
+$Label2.height                   = 45
+$Label2.location                 = New-Object System.Drawing.Point(125,0)
+$Label2.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',24,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
+
 $Panel1                          = New-Object system.Windows.Forms.Panel
-$Panel1.height                   = 178
+$Panel1.height                   = 450
 $Panel1.width                    = 463
-$Panel1.location                 = New-Object System.Drawing.Point(2,2)
+$Panel1.location                 = New-Object System.Drawing.Point(4,4)
 
 $Programas                       = New-Object system.Windows.Forms.Button
 $Programas.text                  = "Remover Programas"
 $Programas.width                 = 212
 $Programas.height                = 30
-$Programas.location              = New-Object System.Drawing.Point(2,2)
+$Programas.location              = New-Object System.Drawing.Point(2,50)
 $Programas.Font                  = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $Firewall                        = New-Object system.Windows.Forms.Button
 $Firewall.text                   = "Firewall do Windows"
 $Firewall.width                  = 212
 $Firewall.height                 = 30
-$Firewall.location               = New-Object System.Drawing.Point(2,37)
+$Firewall.location               = New-Object System.Drawing.Point(2,85)
 $Firewall.Font                   = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $gestor                          = New-Object system.Windows.Forms.Button
 $gestor.text                     = "Gestor de dispositivos"
 $gestor.width                    = 211
 $gestor.height                   = 30
-$gestor.location                 = New-Object System.Drawing.Point(2,72)
+$gestor.location                 = New-Object System.Drawing.Point(2,120)
 $gestor.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $Impressoras                     = New-Object system.Windows.Forms.Button
 $Impressoras.text                = "Impressoras"
 $Impressoras.width               = 212
 $Impressoras.height              = 30
-$Impressoras.location            = New-Object System.Drawing.Point(2,107)
+$Impressoras.location            = New-Object System.Drawing.Point(2,155)
 $Impressoras.Font                = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
-$pastas             		 = New-Object system.Windows.Forms.Button
-$pastas.text          		 = "Opcoes de pastas"
+$pastas                  		 = New-Object system.Windows.Forms.Button
+$pastas.text            		 = "Opcoes de pastas"
 $pastas.width       	         = 212
-$pastas.height     		 = 30
-$pastas.location    	         = New-Object System.Drawing.Point(2,142)
+$pastas.height     	        	 = 30
+$pastas.location    	         = New-Object System.Drawing.Point(2,190)
 $pastas.Font        	         = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $internet                        = New-Object system.Windows.Forms.Button
 $internet.text                   = "Propriedades da internet"
 $internet.width                  = 212
 $internet.height                 = 30
-$internet.location               = New-Object System.Drawing.Point(2,177)
+$internet.location               = New-Object System.Drawing.Point(2,225)
 $internet.Font                   = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $sistema                         = New-Object system.Windows.Forms.Button
 $sistema.text                    = "Propriedades do sistema"
 $sistema.width                   = 212
 $sistema.height                  = 30
-$sistema.location                = New-Object System.Drawing.Point(247,2)
+$sistema.location                = New-Object System.Drawing.Point(247,50)
 $sistema.Font                    = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $ncpa                            = New-Object system.Windows.Forms.Button
 $ncpa.text                       = "Adaptadores de Rede"
 $ncpa.width                      = 211
 $ncpa.height                     = 30
-$ncpa.location                   = New-Object System.Drawing.Point(247,37)
+$ncpa.location                   = New-Object System.Drawing.Point(247,85)
 $ncpa.Font                       = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $oldcontrolpanel                 = New-Object system.Windows.Forms.Button
 $oldcontrolpanel.text            = "Painel de Controle"
 $oldcontrolpanel.width           = 211
 $oldcontrolpanel.height          = 30
-$oldcontrolpanel.location        = New-Object System.Drawing.Point(247,72)
+$oldcontrolpanel.location        = New-Object System.Drawing.Point(247,120)
 $oldcontrolpanel.Font            = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
-
-$temp      			 = New-Object system.Windows.Forms.Button
-$temp.text    			 = "Limpeza de Temp's"
-$temp.width		         = 211
-$temp.height   			 = 30
-$temp.location   		 = New-Object System.Drawing.Point(247,107)
-$temp.Font         		 = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $oldpower                        = New-Object system.Windows.Forms.Button
 $oldpower.text                   = "Plano de Energia"
 $oldpower.width                  = 211
 $oldpower.height                 = 30
-$oldpower.location               = New-Object System.Drawing.Point(4,142)
+$oldpower.location               = New-Object System.Drawing.Point(247,155)
 $oldpower.Font                   = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+
+$temp      		             	 = New-Object system.Windows.Forms.Button
+$temp.text    			         = "Limpeza de Temp's"
+$temp.width		                 = 211
+$temp.height   			         = 30
+$temp.location   		         = New-Object System.Drawing.Point(247,190)
+$temp.Font         		         = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $clean                           = New-Object system.Windows.Forms.Button
 $clean.text                      = "Limpeza de Disco"
 $clean.width                     = 211
 $clean.height                    = 30
-$clean.location                  = New-Object System.Drawing.Point(247,142)
+$clean.location                  = New-Object System.Drawing.Point(247,225)
 $clean.Font                      = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
+$Label3                          = New-Object system.Windows.Forms.Label
+$Label3.text                     = "DOWNLOADS"
+$Label3.AutoSize                 = $True
+$Label3.width                    = 463
+$Label3.height                   = 45
+$Label3.location                 = New-Object System.Drawing.Point(125,265)
+$Label3.Font                     = New-Object System.Drawing.Font('Microsoft Sans Serif',24,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
+
+$nano                           = New-Object system.Windows.Forms.Button
+$nano.text                      = "Nano Debug"
+$nano.width                     = 211
+$nano.height                    = 30
+$nano.location                  = New-Object System.Drawing.Point(2,310)
+$nano.Font                      = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 
 $Form.controls.AddRange(@($Panel1))
-$Panel1.controls.AddRange(@($Programas,$Firewall,$gestor,$Impressoras,$pastas,$internet,$sistema,$ncpa,$oldcontrolpanel,$temp,$oldpower,$clean))
+$Panel1.controls.AddRange(@($Label2,$Programas,$Firewall,$gestor,$Impressoras,$pastas,$internet,$sistema,$ncpa,$oldcontrolpanel,$oldpower,$temp,$clean,$Label3,$nano))
 
 $Programas.Add_Click({
 	cmd /c appwiz.cpl
@@ -193,6 +215,10 @@ $temp.Add_Click({
 
 $clean.Add_Click({
     cmd /c cleanmgr.exe
+})
+
+$nano.Add_Click({
+    Start-Process "https://www.dropbox.com/s/1yqtnsagjzx16sk/Debug.rar?dl=1"
 })
 
 [void]$Form.ShowDialog()
