@@ -189,7 +189,7 @@ $temp.Add_Click({
     $ResultText.text += "`r`n" +"Limpando Arquivos temporarios"
     Import-Module BitsTransfer
     Start-BitsTransfer -Source "https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza%20de%20temps.bat" -Destination "C:\Windows\Temp\limpeza.bat"
-    cmd /c "C:\Windows\Temp\limpeza.bat"
+    cmd C:\Windows\Temp\limpeza.bat
 })
 
 $clean.Add_Click({
