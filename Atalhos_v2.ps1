@@ -183,7 +183,7 @@ $System_Drawing_Size.Height = 205
 $System_Drawing_Size.Width = 445
 $DriveButtonTab.Size = $System_Drawing_Size
 $DriveButtonTab.TabIndex = 96
-$DriveButtonTab.Text = "Drive´s"
+$DriveButtonTab.Text = "Drives"
 $DriveButtonTab.UseVisualStyleBackColor = $True
 
 $TabControl.Controls.Add($DriveButtonTab)
@@ -460,8 +460,8 @@ $oldcontrolpanel.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',7)
 $Panel1.Controls.Add($oldcontrolpanel)
 
 # == oldpower == #
-$oldpower.Name = "Opções de Energia"
-$oldpower.Text = "Opções de Energia"
+$oldpower.Name = "Opcoes de Energia"
+$oldpower.Text = "Opcoes de Energia"
 $oldpower.TabIndex = 13
 $oldpower.UseVisualStyleBackColor = $True
 $oldpower.Add_Click({cmd /c powercfg.cpl})
