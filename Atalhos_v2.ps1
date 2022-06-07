@@ -279,7 +279,7 @@ $MainMenu.Controls.Add($DownloadlBotao)
 
 # == Botao Drive´s == #
 $DriveButton.Name = "DriveButton"
-$DriveButton.Text = "Drive´s"
+$DriveButton.Text = "Drives"
 $DriveButton.TabIndex = 3
 $DriveButton.UseVisualStyleBackColor = $True
 $DriveButton.add_Click($DriveButton_OnClick)
