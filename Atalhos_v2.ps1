@@ -51,6 +51,9 @@ $MainMenu.Icon                       = [System.Drawing.Icon]::FromHandle((New-Ob
 $MainMenu.Width                      = $objImage.Width
 $MainMenu.Height                     = $objImage.Height
 
+# ====Modulos import==== #
+Import-Module BitsTransfer -Force
+
 # ====Logo==== #
 $PictureBox1                     = New-Object system.Windows.Forms.PictureBox
 $PictureBox1.width               = 60
@@ -66,7 +69,7 @@ $Panel1 = New-Object System.Windows.Forms.Panel
 $Panel2 = New-Object System.Windows.Forms.Panel
 $Panel3 = New-Object System.Windows.Forms.Panel
 
-#Botoes
+# ==== Botoes 1º aba ==== #
 $Programas = New-Object System.Windows.Forms.Button
 $Firewall = New-Object System.Windows.Forms.Button
 $gestor = New-Object System.Windows.Forms.Button
@@ -79,7 +82,7 @@ $oldcontrolpanel = New-Object System.Windows.Forms.Button
 $oldpower = New-Object System.Windows.Forms.Button
 $temp = New-Object System.Windows.Forms.Button
 $clean = New-Object System.Windows.Forms.Button
-
+# ==== Botoes 2º aba ==== #
 $nano = New-Object System.Windows.Forms.Button
 $NFE = New-Object System.Windows.Forms.Button
 $NFSE = New-Object System.Windows.Forms.Button
@@ -92,7 +95,7 @@ $sql = New-Object System.Windows.Forms.Button
 $winrar = New-Object System.Windows.Forms.Button
 $Bartender64 = New-Object System.Windows.Forms.Button
 $Bartender32 = New-Object System.Windows.Forms.Button
-
+# ==== Botoes 3º aba ==== #
 $DieBold = New-Object System.Windows.Forms.Button
 $Bematech = New-Object System.Windows.Forms.Button
 $Elgin = New-Object System.Windows.Forms.Button
@@ -265,7 +268,7 @@ $GeralBotao.Size = $System_Drawing_Size
 $GeralBotao.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
 $MainMenu.Controls.Add($GeralBotao)
 
-# == Botao Download´s == #
+# == Botao DownloadÂ´s == #
 $DownloadlBotao.Name = "DownloadlBotao"
 $DownloadlBotao.Text = "Download"
 $DownloadlBotao.TabIndex = 2
@@ -283,7 +286,7 @@ $DownloadlBotao.Size = $System_Drawing_Size
 $DownloadlBotao.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
 $MainMenu.Controls.Add($DownloadlBotao)
 
-# == Botao Drive´s == #
+# == Botao DriveÂ´s == #
 $DriveButton.Name = "DriveButton"
 $DriveButton.Text = "Drives"
 $DriveButton.TabIndex = 3
@@ -488,11 +491,10 @@ $temp.Name = "Limpeza Temp"
 $temp.Text = "Limpeza Temp"
 $temp.TabIndex = 14
 $temp.UseVisualStyleBackColor = $True
-$temp.Add_Click({
-    Write-Host "Limpando Arquivos temporarios"
-    Import-Module BitsTransfer
-    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Users\%USERNAME%\AppData\Local\limpeza_temps.bat
-    Start-Process "cmd.exe"  "/c C:\Users\%USERNAME%\AppData\Local\Limpeza\limpeza_temps.bat"
+$temp.Add_Click({Write-Host "Realizando Download"
+                 Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Nano\limpeza_temps.bat
+                 Start-Process "cmd.exe"  "/c C:\Nano\limpeza_temps.bat"
+                 Write-Host "Limpando Arquivos temporarios"
                 })
 $temp.DataBindings.DefaultDataSourceUpdateMode = 0
 $System_Drawing_Point = New-Object System.Drawing.Point
