@@ -16,7 +16,7 @@ Write-Host "Checking winget..."
 # Check if winget is installed
 if (Test-Path ~\AppData\Local\Microsoft\WindowsApps\winget.exe){
     'Winget Already Installed'
-}  
+}
 else{
     # Installing winget from the Microsoft Store
 	Write-Host "Winget not found, installing it now."
@@ -89,6 +89,14 @@ $setupnano = New-Object System.Windows.Forms.Button
 $crytal = New-Object System.Windows.Forms.Button
 $sql = New-Object System.Windows.Forms.Button
 $winrar = New-Object System.Windows.Forms.Button
+$Bartender64 = New-Object System.Windows.Forms.Button
+$Bartender32 = New-Object System.Windows.Forms.Button
+
+$DieBold = New-Object System.Windows.Forms.Button
+$Bematech = New-Object System.Windows.Forms.Button
+$Elgin = New-Object System.Windows.Forms.Button
+$SATTanca = New-Object System.Windows.Forms.Button
+$SatControlID = New-Object System.Windows.Forms.Button
 
 #Tabs botoes
 $GeralBotao = New-Object System.Windows.Forms.Button
@@ -183,7 +191,7 @@ $System_Drawing_Size.Height = 205
 $System_Drawing_Size.Width = 445
 $DriveButtonTab.Size = $System_Drawing_Size
 $DriveButtonTab.TabIndex = 96
-$DriveButtonTab.Text = "Drives"
+$DriveButtonTab.Text = "Drive´s"
 $DriveButtonTab.UseVisualStyleBackColor = $True
 
 $TabControl.Controls.Add($DriveButtonTab)
@@ -236,9 +244,6 @@ $panel3.BackColor = [System.Drawing.Color]::green
 
 $DriveButtonTab.Controls.Add($panel3)
 
-#$Panel1.controls.AddRange(@($Programas,$Firewall,$gestor,$Impressoras,$pastas,$internet,$sistema,$ncpa,$oldcontrolpanel,$oldpower,$temp,$clean))
-#$Panel2.controls.Addrange(@($nano,$NFE,$NFSE,$NFCE,$Boleto,$nanorar,$setupnano,$crytal,$sql,$winrar))
-
 # ======== Botoes ==== MENU ======== #
 
 # == Botao Geral == #
@@ -279,7 +284,7 @@ $MainMenu.Controls.Add($DownloadlBotao)
 
 # == Botao Drive´s == #
 $DriveButton.Name = "DriveButton"
-$DriveButton.Text = "Drives"
+$DriveButton.Text = "Drive´s"
 $DriveButton.TabIndex = 3
 $DriveButton.UseVisualStyleBackColor = $True
 $DriveButton.add_Click($DriveButton_OnClick)
@@ -460,8 +465,8 @@ $oldcontrolpanel.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',7)
 $Panel1.Controls.Add($oldcontrolpanel)
 
 # == oldpower == #
-$oldpower.Name = "Opcoes de Energia"
-$oldpower.Text = "Opcoes de Energia"
+$oldpower.Name = "Opções de Energia"
+$oldpower.Text = "Opções de Energia"
 $oldpower.TabIndex = 13
 $oldpower.UseVisualStyleBackColor = $True
 $oldpower.Add_Click({cmd /c powercfg.cpl})
@@ -483,9 +488,9 @@ $temp.Text = "Limpeza Temp"
 $temp.TabIndex = 14
 $temp.UseVisualStyleBackColor = $True
 $temp.Add_Click({
-    Write-Host "Limpando Arquivos temporarios" 
-    Import-Module BitsTransfer 
-    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Users\%USERNAME%\AppData\Local\limpeza_temps.bat 
+    Write-Host "Limpando Arquivos temporarios"
+    Import-Module BitsTransfer
+    Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/limpeza_temps.bat -Destination C:\Users\%USERNAME%\AppData\Local\limpeza_temps.bat
     Start-Process "cmd.exe"  "/c C:\Users\%USERNAME%\AppData\Local\Limpeza\limpeza_temps.bat"
                 })
 $temp.DataBindings.DefaultDataSourceUpdateMode = 0
@@ -682,7 +687,7 @@ $sql.Size = $System_Drawing_Size
 $sql.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 $Panel2.Controls.Add($sql)
 
-# == sql == #
+# == Winrar == #
 $winrar.Name = "Winrar"
 $winrar.Text = "Winrar"
 $winrar.TabIndex = 25
@@ -699,5 +704,131 @@ $System_Drawing_Size.Width = 100
 $winrar.Size = $System_Drawing_Size
 $winrar.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
 $Panel2.Controls.Add($winrar)
+
+# == Bartender64 == #
+$Bartender64.Name = "Bartender64"
+$Bartender64.Text = "Bartender64"
+$Bartender64.TabIndex = 26
+$Bartender64.UseVisualStyleBackColor = $True
+$Bartender64.Add_Click({Start-Process "https://www.dropbox.com/s/hvhqp6qulk412ke/Bartender.rar?dl=1"})
+$Bartender64.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 102
+$System_Drawing_Point.Y = 122
+$Bartender64.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$Bartender64.Size = $System_Drawing_Size
+$Bartender64.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',11)
+$Panel2.Controls.Add($Bartender64)
+
+# == Bartender64 == #
+$Bartender32.Name = "Bartender32"
+$Bartender32.Text = "Bartender32"
+$Bartender32.TabIndex = 27
+$Bartender32.UseVisualStyleBackColor = $True
+$Bartender32.Add_Click({Start-Process "https://www.dropbox.com/s/hvhqp6qulk412ke/Bartender.rar?dl=1"})
+$Bartender32.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 102
+$System_Drawing_Point.Y = 152
+$Bartender32.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$Bartender32.Size = $System_Drawing_Size
+$Bartender32.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',11)
+$Panel2.Controls.Add($Bartender32)
+
+# == DieBold == #
+$DieBold.Name = "DieBold"
+$DieBold.Text = "DieBold"
+$DieBold.TabIndex = 28
+$DieBold.UseVisualStyleBackColor = $True
+$DieBold.Add_Click({Start-Process "https://dieboldnixdorf.com.br/suporte-dn/material-para-downloads/"})
+$DieBold.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 2
+$System_Drawing_Point.Y = 2
+$DieBold.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$DieBold.Size = $System_Drawing_Size
+$DieBold.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$Panel3.Controls.Add($DieBold)
+
+# == Bematech == #
+$Bematech.Name = "Bematech"
+$Bematech.Text = "Bematech"
+$Bematech.TabIndex = 29
+$Bematech.UseVisualStyleBackColor = $True
+$Bematech.Add_Click({Start-Process "https://g2sistema.com.br/downloads/"})
+$Bematech.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 2
+$System_Drawing_Point.Y = 32
+$Bematech.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$Bematech.Size = $System_Drawing_Size
+$Bematech.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$Panel3.Controls.Add($Bematech)
+
+# == Elgin == #
+$Elgin.Name = "Elgin"
+$Elgin.Text = "Elgin"
+$Elgin.TabIndex = 30
+$Elgin.UseVisualStyleBackColor = $True
+$Elgin.Add_Click({Start-Process "https://www.bztech.com.br/downloads/driver-elgin-i7-i8-e-i9-windows-e-linux"})
+$Elgin.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 2
+$System_Drawing_Point.Y = 62
+$Elgin.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$Elgin.Size = $System_Drawing_Size
+$Elgin.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$Panel3.Controls.Add($Elgin)
+ 
+# == SAT Tanca == #
+$SATTanca.Name = "SAT Tanca"
+$SATTanca.Text = "SAT Tanca"
+$SATTanca.TabIndex = 31
+$SATTanca.UseVisualStyleBackColor = $True
+$SATTanca.Add_Click({Start-Process "https://www.tanca.com.br/drivers.php?cat=24&sub=43"})
+$SATTanca.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 2
+$System_Drawing_Point.Y = 92
+$SATTanca.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$SATTanca.Size = $System_Drawing_Size
+$SATTanca.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',12)
+$Panel3.Controls.Add($SATTanca)
+
+# == SAT Tanca == #
+$SatControlID.Name = "Sat Control ID"
+$SatControlID.Text = "Sat Control ID"
+$SatControlID.TabIndex = 32
+$SatControlID.UseVisualStyleBackColor = $True
+$SatControlID.Add_Click({Start-Process "https://www.controlid.com.br/contato-suporte/"})
+$SatControlID.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 2
+$System_Drawing_Point.Y = 122
+$SatControlID.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$SatControlID.Size = $System_Drawing_Size
+$SatControlID.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',9)
+$Panel3.Controls.Add($SatControlID)
 
 [void]$MainMenu.ShowDialog()
