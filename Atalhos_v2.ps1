@@ -79,6 +79,7 @@ $oldcontrolpanel = New-Object System.Windows.Forms.Button
 $oldpower = New-Object System.Windows.Forms.Button
 $temp = New-Object System.Windows.Forms.Button
 $clean = New-Object System.Windows.Forms.Button
+
 $nano = New-Object System.Windows.Forms.Button
 $NFE = New-Object System.Windows.Forms.Button
 $NFSE = New-Object System.Windows.Forms.Button
@@ -191,7 +192,7 @@ $System_Drawing_Size.Height = 205
 $System_Drawing_Size.Width = 445
 $DriveButtonTab.Size = $System_Drawing_Size
 $DriveButtonTab.TabIndex = 96
-$DriveButtonTab.Text = "Drive´s"
+$DriveButtonTab.Text = "Drives"
 $DriveButtonTab.UseVisualStyleBackColor = $True
 
 $TabControl.Controls.Add($DriveButtonTab)
@@ -284,7 +285,7 @@ $MainMenu.Controls.Add($DownloadlBotao)
 
 # == Botao Drive´s == #
 $DriveButton.Name = "DriveButton"
-$DriveButton.Text = "Drive´s"
+$DriveButton.Text = "Drives"
 $DriveButton.TabIndex = 3
 $DriveButton.UseVisualStyleBackColor = $True
 $DriveButton.add_Click($DriveButton_OnClick)
@@ -394,7 +395,7 @@ $Panel1.Controls.Add($pastas)
 
 # == internet == #
 $internet.Name = "internet"
-$internet.Text = "internet"
+$internet.Text = "Internet"
 $internet.TabIndex = 9
 $internet.UseVisualStyleBackColor = $True
 $internet.Add_Click({cmd /c inetcpl.cpl})
