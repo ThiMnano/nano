@@ -39,7 +39,7 @@ $MainMenu.AutoScaleDimensions        = '192, 192'
 $MainMenu.AutoScaleMode              = "Dpi"
 $MainMenu.AutoSize                   = $True
 $MainMenu.AutoScroll                 = $True
-$MainMenu.ClientSize                 = '1050, 1000'
+$MainMenu.ClientSize                 = '350, 600'
 $MainMenu.FormBorderStyle            = 'FixedSingle'
 
 # GUI Icon
