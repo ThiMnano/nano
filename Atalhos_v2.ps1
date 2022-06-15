@@ -39,7 +39,7 @@ $MainMenu.AutoScaleDimensions        = '192, 192'
 $MainMenu.AutoScaleMode              = "Dpi"
 $MainMenu.AutoSize                   = $True
 $MainMenu.AutoScroll                 = $True
-$MainMenu.ClientSize                 = '350, 600'
+$MainMenu.ClientSize                 = '1050, 1000'
 $MainMenu.FormBorderStyle            = 'FixedSingle'
 
 # GUI Icon
@@ -58,7 +58,7 @@ Import-Module BitsTransfer -Force
 $PictureBox1                     = New-Object system.Windows.Forms.PictureBox
 $PictureBox1.width               = 60
 $PictureBox1.height              = 60
-$PictureBox1.location            = New-Object System.Drawing.Point(25,125)
+$PictureBox1.location            = New-Object System.Drawing.Point(35,125)
 $PictureBox1.imageLocation       = "https://raw.githubusercontent.com/ThiMnano/nano/main/HelpDesk.png"
 $PictureBox1.SizeMode            = [System.Windows.Forms.PictureBoxSizeMode]::zoom
 
@@ -68,6 +68,17 @@ $MainMenu.Controls.Add($PictureBox1)
 $Panel1 = New-Object System.Windows.Forms.Panel
 $Panel2 = New-Object System.Windows.Forms.Panel
 $Panel3 = New-Object System.Windows.Forms.Panel
+
+# == Versão == #
+$text = New-Object System.Windows.Forms.label
+$text.Name = "Versao"
+$text.Text = "V3.0"
+$text.UseVisualStyleBackColor = $True
+$text.DataBindings.DefaultDataSourceUpdateMode = 0
+$text.Location = '0 , 172'
+$text.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
+$MainMenu.Controls.Add($text)
+
 
 # ==== Botoes 1º aba ==== #
 $Programas = New-Object System.Windows.Forms.Button
@@ -101,6 +112,9 @@ $Bematech = New-Object System.Windows.Forms.Button
 $Elgin = New-Object System.Windows.Forms.Button
 $SATTanca = New-Object System.Windows.Forms.Button
 $SatControlID = New-Object System.Windows.Forms.Button
+$port33 = New-Object System.Windows.Forms.Button
+$port35 = New-Object System.Windows.Forms.Button
+$portsat = New-Object System.Windows.Forms.Button
 
 #Tabs botoes
 $GeralBotao = New-Object System.Windows.Forms.Button
@@ -833,5 +847,72 @@ $System_Drawing_Size.Width = 100
 $SatControlID.Size = $System_Drawing_Size
 $SatControlID.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',9)
 $Panel3.Controls.Add($SatControlID)
+
+# == Liberar Port 1433 == #
+$port33.Name = "Liberar Port 1433"
+$port33.Text = "Liberar Port 1433"
+$port33.TabIndex = 34
+$port33.UseVisualStyleBackColor = $True
+$port33.Add_Click({Write-Host "Realizando Download"
+                 Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/Open%201433.bat -Destination C:\Nano\port1433.bat
+                 Start-Process "cmd.exe"  "/c C:\Nano\port1433.bat"
+                 Write-Host "Porta 1433 liberada"
+                })
+$port33.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 102
+$System_Drawing_Point.Y = 2
+$port33.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$port33.Size = $System_Drawing_Size
+$port33.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
+$Panel3.Controls.Add($port33)
+
+# == Liberar Port 1435 == #
+$port35.Name = "Liberar Port 1435"
+$port35.Text = "Liberar Port 1435"
+$port35.TabIndex = 35
+$port35.UseVisualStyleBackColor = $True
+$port35.Add_Click({Write-Host "Realizando Download"
+                 Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/Open%201435.bat -Destination C:\Nano\port1435.bat
+                 Start-Process "cmd.exe"  "/c C:\Nano\port1435.bat"
+                 Write-Host "Porta 1435 liberada"
+                })
+$port35.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 102
+$System_Drawing_Point.Y = 32
+$port35.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$port35.Size = $System_Drawing_Size
+$port35.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
+$Panel3.Controls.Add($port35)
+
+
+# == Liberar Port SAT == #
+$portsat.Name = "Liberar Port Sat"
+$portsat.Text = "Liberar Port Sat"
+$portsat.TabIndex = 36
+$portsat.UseVisualStyleBackColor = $True
+$portsat.Add_Click({Write-Host "Realizando Download"
+                 Start-BitsTransfer -Source https://raw.githubusercontent.com/ThiMnano/nano/main/Open%20port%20sat.bat -Destination C:\Nano\portsat.bat
+                 Start-Process "cmd.exe"  "/c C:\Nano\portsat.bat"
+                 Write-Host "Porta Sat Liberada"
+                })
+$portsat.DataBindings.DefaultDataSourceUpdateMode = 0
+$System_Drawing_Point = New-Object System.Drawing.Point
+$System_Drawing_Point.X = 102
+$System_Drawing_Point.Y = 62
+$portsat.Location = $System_Drawing_Point
+$System_Drawing_Size = New-Object System.Drawing.Size
+$System_Drawing_Size.Height = 30
+$System_Drawing_Size.Width = 100
+$portsat.Size = $System_Drawing_Size
+$portsat.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
+$Panel3.Controls.Add($portsat)
 
 [void]$MainMenu.ShowDialog()
