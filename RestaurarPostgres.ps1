@@ -1,18 +1,3 @@
-if (-not $env:PS_HIDDEN) {
-    $env:PS_HIDDEN = "1"
-
-    $cmd = @"
-`$env:PS_HIDDEN='1'
-iwr -useb https://raw.githubusercontent.com/ThiMnano/nano/main/RestaurarPostgres.ps1 | iex
-"@
-
-    Start-Process powershell `
-        -WindowStyle Hidden `
-        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command $cmd"
-
-    exit
-}
-
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
