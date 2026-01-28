@@ -34,7 +34,7 @@ $pg_restore = Join-Path $pgBin "pg_restore.exe"
 $psql = Join-Path $pgBin "psql.exe"
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Restore PostgreSQL (.backup)"
+$form.Text = "Restore PostgreSQL (.backup/.sql)"
 $form.Size = New-Object System.Drawing.Size(700,550)
 $form.StartPosition = "CenterScreen"
 
@@ -93,7 +93,7 @@ $form.Controls.Add($btnRestore)
 
 $btnBrowse.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = "Backup PostgreSQL (*.backup)|*.backup"
+    $dlg.Filter = "Backup PostgreSQL (*.backup;*.sql)|*.backup;*.sql"
     if($dlg.ShowDialog() -eq "OK"){
         $txtFile.Text = $dlg.FileName
     }
