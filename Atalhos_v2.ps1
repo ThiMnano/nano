@@ -1,31 +1,35 @@
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$ErrorActionPreference = 'SilentlyContinue'
-$wshell = New-Object -ComObject Wscript.Shell
-$Button = [System.Windows.MessageBoxButton]::YesNoCancel
-$ErrorIco = [System.Windows.MessageBoxImage]::Error
-If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')) {
-	Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-	Exit
+$ErrorActionPreference = 'Stop'
+
+# Elevação
+if (-not ([Security.Principal.WindowsPrincipal]
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+
+    Start-Process powershell.exe `
+        "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
+        -Verb RunAs
+    exit
 }
 
-# GUI Specs
-Write-Host "Checking winget..."
+Write-Host "Verificando winget..."
 
-# Check if winget is installed
-if (Test-Path ~\AppData\Local\Microsoft\WindowsApps\winget.exe){
-    'Winget Already Installed'
+$winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+
+if ($winget) {
+    Write-Host "Winget já instalado"
 }
-else{
-    # Installing winget from the Microsoft Store
-	Write-Host "Winget not found, installing it now."
-    $ResultText.text = "`r`n" +"`r`n" + "Installing Winget... Please Wait"
-	Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
-	$nid = (Get-Process AppInstaller).Id
-	Wait-Process -Id $nid
-	Write-Host Winget Installed
-    $ResultText.text = "`r`n" +"`r`n" + "Winget Installed - Ready for Next Task"
+else {
+    Write-Host "Winget não encontrado. Abrindo instalador..."
+    Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
+    [System.Windows.Forms.MessageBox]::Show(
+        "Winget não encontrado.`nInstalador aberto.",
+        "Winget",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
 }
 
 #region Generated Form Objects
@@ -916,3 +920,4 @@ $portsat.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
 $Panel3.Controls.Add($portsat)
 
 [void]$MainMenu.ShowDialog()
+
