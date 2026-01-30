@@ -1,31 +1,36 @@
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$ErrorActionPreference = 'SilentlyContinue'
-$wshell = New-Object -ComObject Wscript.Shell
-$Button = [System.Windows.MessageBoxButton]::YesNoCancel
-$ErrorIco = [System.Windows.MessageBoxImage]::Error
-If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')) {
-	Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-	Exit
+$ErrorActionPreference = 'Stop'
+
+# Verificação de Administrador (compatível com iwr | iex)
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Este script precisa ser executado como Administrador.`nAbra o PowerShell como Administrador.",
+        "Permissão",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
 }
 
-# GUI Specs
-Write-Host "Checking winget..."
 
-# Check if winget is installed
-if (Test-Path ~\AppData\Local\Microsoft\WindowsApps\winget.exe){
-    'Winget Already Installed'
-}  
-else{
-    # Installing winget from the Microsoft Store
-	Write-Host "Winget not found, installing it now."
-    $ResultText.text = "`r`n" +"`r`n" + "Installing Winget... Please Wait"
-	Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
-	$nid = (Get-Process AppInstaller).Id
-	Wait-Process -Id $nid
-	Write-Host Winget Installed
-    $ResultText.text = "`r`n" +"`r`n" + "Winget Installed - Ready for Next Task"
+Write-Host "Verificando winget..."
+
+$winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+
+if ($winget) {
+    Write-Host "Winget já instalado"
+}
+else {
+    Write-Host "Winget não encontrado. Abrindo instalador..."
+    Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
+    [System.Windows.Forms.MessageBox]::Show(
+        "Winget não encontrado.`nInstalador aberto.",
+        "Winget",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
 }
 
 $Form                            = New-Object system.Windows.Forms.Form
