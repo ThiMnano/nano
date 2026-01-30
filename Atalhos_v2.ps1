@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $ErrorActionPreference = 'Stop'
@@ -78,7 +78,6 @@ $Panel3 = New-Object System.Windows.Forms.Panel
 $text = New-Object System.Windows.Forms.label
 $text.Name = "Versao"
 $text.Text = "V3.0"
-$text.UseVisualStyleBackColor = $True
 $text.DataBindings.DefaultDataSourceUpdateMode = 0
 $text.Location = '0 , 172'
 $text.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8,[System.Drawing.FontStyle]([System.Drawing.FontStyle]::Bold))
@@ -921,6 +920,3 @@ $portsat.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
 $Panel3.Controls.Add($portsat)
 
 [void]$MainMenu.ShowDialog()
-
-
-
