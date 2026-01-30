@@ -1,6 +1,33 @@
 ﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
+$ErrorActionPreference = 'Stop'
+# Verificação de Administrador (compatível com iwr | iex)
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Este script precisa ser executado como Administrador.`nAbra o PowerShell como Administrador.",
+        "Permissão",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
+}
+Write-Host "Verificando winget..."
+$winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+if ($winget) {
+    Write-Host "Winget já instalado"
+}
+else {
+    Write-Host "Winget não encontrado. Abrindo instalador..."
+    Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
+    [System.Windows.Forms.MessageBox]::Show(
+        "Winget não encontrado.`nInstalador aberto.",
+        "Winget",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+}
 # =========================
 # LOG
 # =========================
