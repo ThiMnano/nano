@@ -3,15 +3,15 @@ Add-Type -AssemblyName System.Windows.Forms
 
 $ErrorActionPreference = 'Stop'
 
-# Elevação
-if (-not ([Security.Principal.WindowsPrincipal]
-    [Security.Principal.WindowsIdentity]::GetCurrent()
-).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-
-    Start-Process powershell.exe `
-        "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
-        -Verb RunAs
-    exit
+# Verificação de Administrador (compatível com iwr | iex)
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    [System.Windows.Forms.MessageBox]::Show(
+        "Este script precisa ser executado como Administrador.`n`nAbra o PowerShell como Administrador e execute novamente.",
+        "Permissão necessária",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
 }
 
 Write-Host "Verificando winget..."
@@ -920,4 +920,5 @@ $portsat.Font = New-Object System.Drawing.Font('Microsoft Sans Serif',8)
 $Panel3.Controls.Add($portsat)
 
 [void]$MainMenu.ShowDialog()
+
 
