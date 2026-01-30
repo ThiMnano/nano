@@ -1,23 +1,52 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# =========================
+# LOG
+# =========================
 function Log($msg){
     $txtLog.AppendText("[$(Get-Date -Format HH:mm:ss)] $msg`r`n")
     $txtLog.ScrollToCaret()
 }
+
+# =========================
+# LOCALIZAR BIN POSTGRESQL
+# =========================
 function Find-PgBin {
     $paths = @()
+
+    # Registro oficial PostgreSQL
     $reg = "HKLM:\SOFTWARE\PostgreSQL\Installations"
-    if(Test-Path $reg){
+    if (Test-Path $reg) {
         Get-ChildItem $reg | ForEach-Object {
             $base = (Get-ItemProperty $_.PsPath).BaseDirectory
-            if($base){ $paths += (Join-Path $base "bin") }
+            if ($base) {
+                $paths += (Join-Path $base "bin")
+            }
         }
     }
+
+    # Program Files (padrão)
+    $pf = "${env:ProgramFiles}\PostgreSQL"
+    if (Test-Path $pf) {
+        Get-ChildItem $pf -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $paths += (Join-Path $_.FullName "bin")
+        }
+    }
+
+    # Program Files (x86)
+    $pf86 = "${env:ProgramFiles(x86)}\PostgreSQL"
+    if (Test-Path $pf86) {
+        Get-ChildItem $pf86 -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $paths += (Join-Path $_.FullName "bin")
+        }
+    }
+
+    # pgAdmin runtime (fallback)
     $paths += "$env:LOCALAPPDATA\Programs\pgAdmin 4\runtime"
 
-    foreach($p in $paths){
-        if(Test-Path (Join-Path $p "pg_restore.exe")){
+    foreach ($p in $paths) {
+        if (Test-Path (Join-Path $p "pg_restore.exe")) {
             return $p
         }
     }
@@ -26,15 +55,21 @@ function Find-PgBin {
 
 $pgBin = Find-PgBin
 if(!$pgBin){
-    [System.Windows.Forms.MessageBox]::Show("pg_restore.exe não encontrado.","Erro",0,16)
+    [System.Windows.Forms.MessageBox]::Show(
+        "pg_restore.exe não encontrado.`nInstale o PostgreSQL.",
+        "Erro",0,16
+    )
     exit
 }
 
 $pg_restore = Join-Path $pgBin "pg_restore.exe"
-$psql = Join-Path $pgBin "psql.exe"
+$psql       = Join-Path $pgBin "psql.exe"
 
+# =========================
+# FORM
+# =========================
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Restore PostgreSQL (.backup/.sql)"
+$form.Text = "Restore PostgreSQL (.backup / .sql)"
 $form.Size = New-Object System.Drawing.Size(700,550)
 $form.StartPosition = "CenterScreen"
 
@@ -57,18 +92,19 @@ function Add-TextBox($x,$y,$w=300,$pwd=$false){
 
 Add-Label "Servidor:" 20 20
 $txtHost = Add-TextBox 140 18
+$txtHost.Text = "localhost"
 
 Add-Label "Porta:" 20 55
 $txtPort = Add-TextBox 140 53 80
 $txtPort.Text = "5432"
 
-Add-Label "Usuario:" 20 90
+Add-Label "Usuário:" 20 90
 $txtUser = Add-TextBox 140 88
 
 Add-Label "Senha:" 20 125
 $txtPass = Add-TextBox 140 123 300 $true
 
-Add-Label "Arquivo .backup:" 20 160
+Add-Label "Arquivo Backup:" 20 160
 $txtFile = Add-TextBox 140 158 420
 
 $btnBrowse = New-Object System.Windows.Forms.Button
@@ -91,6 +127,9 @@ $btnRestore.Location = New-Object System.Drawing.Point(290,460)
 $btnRestore.Width = 120
 $form.Controls.Add($btnRestore)
 
+# =========================
+# BROWSE
+# =========================
 $btnBrowse.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = "Backup PostgreSQL (*.backup;*.sql)|*.backup;*.sql"
@@ -99,11 +138,13 @@ $btnBrowse.Add_Click({
     }
 })
 
+# =========================
+# RESTORE
+# =========================
 $btnRestore.Add_Click({
 
     if(!$txtHost.Text -or !$txtPort.Text -or !$txtUser.Text -or !$txtPass.Text -or !$txtFile.Text){
         Log "Erro: campos obrigatórios não preenchidos"
-        [System.Windows.Forms.MessageBox]::Show("Preencha todos os campos.","Erro",0,16)
         return
     }
 
@@ -113,51 +154,72 @@ $btnRestore.Add_Click({
     }
 
     $env:PGPASSWORD = $txtPass.Text
-    Log "pg_restore encontrado em: $pgBin"
+    Log "Bin PostgreSQL: $pgBin"
 
-    Log "Identificando banco no backup..."
-    $dbName = (& $pg_restore -l "$($txtFile.Text)" | Select-String "DATABASE" | Select-Object -First 1).ToString().Split(" ")[-1]
+    $ext = [IO.Path]::GetExtension($txtFile.Text).ToLower()
 
-    if(!$dbName){
-        Log "Erro: não foi possível identificar o banco"
-        return
+    if($ext -eq ".backup"){
+        Log "Detectado backup CUSTOM (.backup)"
+
+        $dbName = (& $pg_restore -l "`"$($txtFile.Text)`"" |
+                  Select-String "DATABASE" |
+                  Select-Object -First 1).ToString().Split(" ")[-1]
+
+        if(!$dbName){
+            Log "Erro ao detectar banco"
+            return
+        }
+
+        Log "Banco detectado: $dbName"
+
+        $exists = & $psql -h $txtHost.Text -p $txtPort.Text -U $txtUser.Text `
+            -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='$dbName';"
+
+        if($exists.Trim() -eq "1"){
+            $resp = [System.Windows.Forms.MessageBox]::Show(
+                "Banco '$dbName' já existe. Substituir?",
+                "Confirmação",4,32
+            )
+            if($resp -ne "Yes"){ return }
+
+            Log "Finalizando conexões..."
+            & $psql -h $txtHost.Text -p $txtPort.Text -U $txtUser.Text -d postgres -c "
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname='$dbName';
+            "
+        }
+
+        Log "Iniciando pg_restore..."
+        $proc = Start-Process $pg_restore -Wait -NoNewWindow -PassThru `
+            -ArgumentList @(
+                "-h",$txtHost.Text,
+                "-p",$txtPort.Text,
+                "-U",$txtUser.Text,
+                "-C","-c","--if-exists",
+                "-d","postgres",
+                "--no-owner",
+                "`"$($txtFile.Text)`""
+            )
     }
+    else {
+        Log "Detectado backup SQL (.sql)"
+        Log "Executando psql..."
 
-    Log "Banco detectado: $dbName"
-
-    $exists = & $psql -h $txtHost.Text -p $txtPort.Text -U $txtUser.Text -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='$dbName';"
-
-    if($exists.Trim() -eq "1"){
-        Log "Banco já existe"
-        $resp = [System.Windows.Forms.MessageBox]::Show(
-            "Banco '$dbName' já existe. Substituir?",
-            "Confirmação",4,32
-        )
-        if($resp -ne "Yes"){ Log "Operação cancelada"; return }
-
-        Log "Encerrando conexões ativas..."
-        & $psql -h $txtHost.Text -p $txtPort.Text -U $txtUser.Text -d postgres -c "
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname='$dbName';
-        "
+        $proc = Start-Process $psql -Wait -NoNewWindow -PassThru `
+            -ArgumentList @(
+                "-h",$txtHost.Text,
+                "-p",$txtPort.Text,
+                "-U",$txtUser.Text,
+                "-f","`"$($txtFile.Text)`""
+            )
     }
-
-    Log "Iniciando restore..."
-    $proc = Start-Process $pg_restore -ArgumentList @(
-        "-h $($txtHost.Text)",
-        "-p $($txtPort.Text)",
-        "-U $($txtUser.Text)",
-        "-C -c --if-exists",
-        "-d postgres",
-        "--no-owner",
-        "`"$($txtFile.Text)`""
-    ) -Wait -NoNewWindow -PassThru
 
     if($proc.ExitCode -ne 0){
         Log "ERRO no restore (ExitCode=$($proc.ExitCode))"
-        [System.Windows.Forms.MessageBox]::Show("Erro ao restaurar banco.","Erro",0,16)
-    } else {
+        [System.Windows.Forms.MessageBox]::Show("Erro ao restaurar.","Erro",0,16)
+    }
+    else {
         Log "Restore concluído com sucesso"
         [System.Windows.Forms.MessageBox]::Show("Banco restaurado com sucesso!","Sucesso",0,64)
         $form.Close()
