@@ -1374,7 +1374,7 @@ function Initialize-BackupTab {
     $script:UI.txtPassBkp = New-Object System.Windows.Forms.TextBox
     $script:UI.txtPassBkp.Location = New-Object System.Drawing.Point(375, 53)
     $script:UI.txtPassBkp.Size = New-Object System.Drawing.Size(135, 20)
-    $script:UI.txtPassBkp.PasswordChar = '●'
+    $script:UI.txtPassBkp.UseSystemPasswordChar = $true
     $grpConnection.Controls.Add($script:UI.txtPassBkp)
     
     # Botão Conectar
@@ -1565,7 +1565,7 @@ function Initialize-RestoreTab {
     $script:UI.txtPassRestore = New-Object System.Windows.Forms.TextBox
     $script:UI.txtPassRestore.Location = New-Object System.Drawing.Point(375, 53)
     $script:UI.txtPassRestore.Size = New-Object System.Drawing.Size(135, 20)
-    $script:UI.txtPassRestore.PasswordChar = '●'
+    $script:UI.txtPassRestore.UseSystemPasswordChar = $true
     $grpConnection.Controls.Add($script:UI.txtPassRestore)
     
     # Botão Test Connection
