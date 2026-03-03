@@ -1,817 +1,1744 @@
-# ========================================
-# PostgreSQL Backup & Restore Manager
-# Versão 2.2 - Refatorada
-# ========================================
+[CmdletBinding()]
+param()
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-[System.Windows.Forms.Application]::EnableVisualStyles()
+#region Assembly Loading
+try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+}
+catch {
+    Write-Error "Erro ao carregar assemblies do Windows Forms: $_"
+    exit 1
+}
+#endregion
 
-# Configuração de encoding (segura)
-$OutputEncoding = [System.Text.Encoding]::UTF8
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
-
-$ErrorActionPreference = 'Stop'
-
-# ========================================
-# VERIFICAÇÃO DE ADMINISTRADOR
-# ========================================
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    [System.Windows.Forms.MessageBox]::Show(
-        "Este script precisa ser executado como Administrador.`n`nAbra o PowerShell como Administrador e execute novamente.",
-        "Permissão Necessária",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-    exit
+#region Global Variables
+$script:Config = @{
+    pgBinPath = $null
+    pgRestorePath = $null
+    psqlPath = $null
+    pgDumpPath = $null
+    FormTitle = "PostgreSQL Backup & Restore Pro"
+    Version = "2.0"
 }
 
-# ========================================
-# VERIFICAÇÃO DO WINGET (OPCIONAL)
-# ========================================
-$winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-if (!$winget) {
-    $resp = [System.Windows.Forms.MessageBox]::Show(
-        "Winget não encontrado.`n`nDeseja abrir o instalador?",
-        "Winget",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($resp -eq "Yes") {
-        Start-Process "ms-appinstaller:?source=https://aka.ms/getwinget"
+$script:PredefinedHosts = @{
+    "localhost" = @{
+        Port = "5432"
+        User = "postgres"
+        Pass = ""
+    }
+    "cloud1.sistemasnano.com.br" = @{
+        Port = "5432"
+        User = "webadmin"
+        Pass = ""
+    }
+    "cloud2.sistemasnano.com.br" = @{
+        Port = "5432"
+        User = ""
+        Pass = ""
     }
 }
 
-# ========================================
-# CONFIGURAR ENVIRONMENT PARA POSTGRESQL
-# ========================================
-function Set-PgEnvironment {
-    $env:PGCLIENTENCODING = "UTF8"
-    $env:PAGER = ""
+# UI Controls - declarados em escopo de script para acesso global
+$script:UI = @{
+    Form = $null
+    rtbLog = $null
+    # Backup Tab
+    cboHostBkp = $null
+    txtPortBkp = $null
+    txtUserBkp = $null
+    txtPassBkp = $null
+    cboDBBkp = $null
+    btnConnectBkp = $null
+    btnBackup = $null
+    # Restore Tab
+    txtHostRestore = $null
+    txtPortRestore = $null
+    txtUserRestore = $null
+    txtPassRestore = $null
+    txtFileRestore = $null
+    btnTestConnection = $null
+    btnRestore = $null
+}
+#endregion
+
+#region Logging Functions
+function Write-Log {
+    <#
+    .SYNOPSIS
+        Escreve mensagem no log com timestamp
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Info', 'Success', 'Warning', 'Error')]
+        [string]$Level = 'Info'
+    )
+    
+    try {
+        if ($null -eq $script:UI.rtbLog) { return }
+        
+        $timestamp = Get-Date -Format "HH:mm:ss"
+        $prefix = switch ($Level) {
+            'Success' { '✓' }
+            'Error'   { '✗' }
+            'Warning' { '⚠' }
+            default   { '•' }
+        }
+        
+        $color = switch ($Level) {
+            'Success' { [System.Drawing.Color]::LimeGreen }
+            'Error'   { [System.Drawing.Color]::Red }
+            'Warning' { [System.Drawing.Color]::Yellow }
+            default   { [System.Drawing.Color]::LightGray }
+        }
+        
+        $script:UI.rtbLog.SelectionStart = $script:UI.rtbLog.TextLength
+        $script:UI.rtbLog.SelectionLength = 0
+        $script:UI.rtbLog.SelectionColor = $color
+        $script:UI.rtbLog.AppendText("[$timestamp] $prefix $Message`r`n")
+        $script:UI.rtbLog.SelectionColor = $script:UI.rtbLog.ForeColor
+        $script:UI.rtbLog.ScrollToCaret()
+        
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    catch {
+        Write-Warning "Erro ao escrever log: $_"
+    }
 }
 
-# ========================================
-# LOCALIZAR BINÁRIOS DO POSTGRESQL
-# ========================================
-function Find-PgBin {
-    $paths = @()
+function Clear-Log {
+    <#
+    .SYNOPSIS
+        Limpa o log
+    #>
+    [CmdletBinding()]
+    param()
+    
+    if ($null -ne $script:UI.rtbLog) {
+        $script:UI.rtbLog.Clear()
+    }
+}
+#endregion
 
-    # Registro oficial PostgreSQL
-    $reg = "HKLM:\SOFTWARE\PostgreSQL\Installations"
-    if (Test-Path $reg) {
-        Get-ChildItem $reg -ErrorAction SilentlyContinue | ForEach-Object {
-            $base = (Get-ItemProperty $_.PsPath).BaseDirectory
-            if ($base) {
-                $paths += (Join-Path $base "bin")
+#region PostgreSQL Binary Detection
+function Find-PostgreSQLBinaries {
+    <#
+    .SYNOPSIS
+        Detecta automaticamente os binários do PostgreSQL
+    .DESCRIPTION
+        Procura em múltiplos locais comuns e no registro do Windows
+    #>
+    [CmdletBinding()]
+    param()
+    
+    Write-Log "Procurando binários do PostgreSQL..." -Level Info
+    
+    $searchPaths = @()
+    
+    # 1. Registro do Windows (instalações oficiais)
+    try {
+        $regPath = "HKLM:\SOFTWARE\PostgreSQL\Installations"
+        if (Test-Path $regPath) {
+            $installations = Get-ChildItem -Path $regPath -ErrorAction SilentlyContinue
+            foreach ($installation in $installations) {
+                try {
+                    $props = Get-ItemProperty -Path $installation.PSPath -ErrorAction SilentlyContinue
+                    if ($props.BaseDirectory) {
+                        $binPath = Join-Path $props.BaseDirectory "bin"
+                        $searchPaths += $binPath
+                        Write-Verbose "Encontrado no registro: $binPath"
+                    }
+                }
+                catch {
+                    Write-Verbose "Erro ao ler instalação: $_"
+                }
             }
         }
     }
-
-    # Program Files
-    $pf = "${env:ProgramFiles}\PostgreSQL"
-    if (Test-Path $pf) {
-        Get-ChildItem $pf -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $paths += (Join-Path $_.FullName "bin")
+    catch {
+        Write-Log "Aviso: Não foi possível acessar registro - $($_.Exception.Message)" -Level Warning
+    }
+    
+    # 2. Program Files (64-bit)
+    $programFiles = ${env:ProgramFiles}
+    $pgFolder = Join-Path $programFiles "PostgreSQL"
+    if (Test-Path $pgFolder) {
+        Get-ChildItem -Path $pgFolder -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $binPath = Join-Path $_.FullName "bin"
+            if (Test-Path $binPath) {
+                $searchPaths += $binPath
+                Write-Verbose "Encontrado em Program Files: $binPath"
+            }
         }
     }
-
-    # Program Files (x86)
-    $pf86 = "${env:ProgramFiles(x86)}\PostgreSQL"
-    if (Test-Path $pf86) {
-        Get-ChildItem $pf86 -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $paths += (Join-Path $_.FullName "bin")
+    
+    # 3. Program Files (x86)
+    if (${env:ProgramFiles(x86)}) {
+        $pgFolderX86 = Join-Path ${env:ProgramFiles(x86)} "PostgreSQL"
+        if (Test-Path $pgFolderX86) {
+            Get-ChildItem -Path $pgFolderX86 -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $binPath = Join-Path $_.FullName "bin"
+                if (Test-Path $binPath) {
+                    $searchPaths += $binPath
+                    Write-Verbose "Encontrado em Program Files (x86): $binPath"
+                }
+            }
         }
     }
-
-    # pgAdmin runtime
-    $paths += "$env:LOCALAPPDATA\Programs\pgAdmin 4\runtime"
-
-    foreach ($p in $paths) {
-        if (Test-Path (Join-Path $p "pg_restore.exe")) {
-            return $p
+    
+    # 4. pgAdmin 4 runtime
+    $localAppData = $env:LOCALAPPDATA
+    $pgAdminPaths = @(
+        (Join-Path $localAppData "Programs\pgAdmin 4\runtime"),
+        (Join-Path $localAppData "Programs\pgAdmin 4\v4\runtime"),
+        (Join-Path $localAppData "Programs\pgAdmin 4\v5\runtime"),
+        (Join-Path $localAppData "Programs\pgAdmin 4\v6\runtime"),
+        (Join-Path $localAppData "Programs\pgAdmin 4\v7\runtime")
+    )
+    
+    foreach ($pgAdminPath in $pgAdminPaths) {
+        if (Test-Path $pgAdminPath) {
+            $searchPaths += $pgAdminPath
+            Write-Verbose "Encontrado pgAdmin: $pgAdminPath"
         }
     }
-    return $null
-}
-
-$pgBin = Find-PgBin
-if (!$pgBin) {
+    
+    # 5. PATH environment variable
+    $pathEnv = $env:PATH -split ';'
+    foreach ($path in $pathEnv) {
+        if ($path -match 'postgres' -and (Test-Path $path)) {
+            $searchPaths += $path
+            Write-Verbose "Encontrado no PATH: $path"
+        }
+    }
+    
+    # Remover duplicatas
+    $searchPaths = $searchPaths | Select-Object -Unique
+    
+    Write-Verbose "Total de caminhos para verificar: $($searchPaths.Count)"
+    
+    # 6. Verificar binários necessários em cada caminho
+    $requiredBinaries = @('pg_restore.exe', 'psql.exe', 'pg_dump.exe')
+    
+    foreach ($binPath in $searchPaths) {
+        $foundAll = $true
+        $binaryPaths = @{}
+        
+        foreach ($binary in $requiredBinaries) {
+            $fullPath = Join-Path $binPath $binary
+            if (Test-Path $fullPath) {
+                $binaryPaths[$binary] = $fullPath
+            }
+            else {
+                $foundAll = $false
+                break
+            }
+        }
+        
+        if ($foundAll) {
+            $script:Config.pgBinPath = $binPath
+            $script:Config.pgRestorePath = $binaryPaths['pg_restore.exe']
+            $script:Config.psqlPath = $binaryPaths['psql.exe']
+            $script:Config.pgDumpPath = $binaryPaths['pg_dump.exe']
+            
+            # Obter versão do PostgreSQL
+            try {
+                $versionOutput = & $script:Config.psqlPath --version 2>&1
+                Write-Log "✓ PostgreSQL encontrado: $binPath" -Level Success
+                Write-Log "  Versão: $versionOutput" -Level Info
+            }
+            catch {
+                Write-Log "✓ PostgreSQL encontrado: $binPath" -Level Success
+            }
+            
+            return $true
+        }
+    }
+    
+    # Não encontrou
+    Write-Log "✗ ERRO: Binários PostgreSQL não encontrados!" -Level Error
+    Write-Log "  Caminhos verificados: $($searchPaths.Count)" -Level Error
+    
     [System.Windows.Forms.MessageBox]::Show(
-        "Binários do PostgreSQL não encontrados.`n`nInstale o PostgreSQL ou pgAdmin 4.",
-        "Erro",
+        "PostgreSQL não encontrado!`r`n`r`n" +
+        "Certifique-se de ter o PostgreSQL instalado.`r`n" +
+        "Os seguintes binários são necessários:`r`n" +
+        "  • pg_dump.exe`r`n" +
+        "  • pg_restore.exe`r`n" +
+        "  • psql.exe`r`n`r`n" +
+        "Download: https://www.postgresql.org/download/",
+        "PostgreSQL não encontrado",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
     )
-    exit
-}
-
-$pg_restore = Join-Path $pgBin "pg_restore.exe"
-$pg_dump    = Join-Path $pgBin "pg_dump.exe"
-$psql       = Join-Path $pgBin "psql.exe"
-
-Set-PgEnvironment
-
-# ========================================
-# VARIÁVEIS GLOBAIS DE CONTROLES
-# ========================================
-$script:txtLog = $null
-$script:txtHost = $null
-$script:txtPort = $null
-$script:txtUser = $null
-$script:txtPass = $null
-$script:txtRestoreFile = $null
-$script:txtRestoreDB = $null
-$script:txtBackupDB = $null
-$script:txtBackupFile = $null
-$script:chkDropIfExists = $null
-$script:cmbFormat = $null
-
-# ========================================
-# FUNÇÃO DE LOG
-# ========================================
-function Log {
-    param([string]$msg, [string]$tipo = "INFO")
     
-    $timestamp = Get-Date -Format "HH:mm:ss"
-    $logMsg = "[$timestamp] [$tipo] $msg"
-    
-    $script:txtLog.AppendText("$logMsg`r`n")
-    $script:txtLog.ScrollToCaret()
-    [System.Windows.Forms.Application]::DoEvents()
+    return $false
 }
+#endregion
 
-# ========================================
-# FUNÇÕES AUXILIARES DE CRIAÇÃO
-# ========================================
-function New-Label {
+#region Connection Functions
+function Test-PostgreSQLConnection {
+    <#
+    .SYNOPSIS
+        Testa conexão com servidor PostgreSQL
+    #>
+    [CmdletBinding()]
     param(
-        [string]$Text,
-        [int]$X,
-        [int]$Y,
-        [System.Windows.Forms.Control]$Parent
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password
     )
+    
+    if ([string]::IsNullOrWhiteSpace($script:Config.psqlPath)) {
+        Write-Log "PostgreSQL não configurado!" -Level Error
+        return $false
+    }
+    
+    Write-Log "Testando conexão com $HostName`:$Port..." -Level Info
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"SELECT version();`" -t"
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        
+        # Timeout de 10 segundos
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao conectar (10s)" -Level Error
+            return $false
+        }
+        
+        if ($process.ExitCode -eq 0) {
+            $version = $stdout.Trim()
+            Write-Log "✓ Conexão bem-sucedida!" -Level Success
+            if ($version) {
+                Write-Log "  $version" -Level Info
+            }
+            return $true
+        }
+        else {
+            $errorMsg = if ($stderr) { $stderr.Trim() } else { "Código de saída: $($process.ExitCode)" }
+            Write-Log "✗ Falha na conexão: $errorMsg" -Level Error
+            return $false
+        }
+    }
+    catch {
+        Write-Log "✗ Erro ao testar conexão: $($_.Exception.Message)" -Level Error
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+        if ($process -and -not $process.HasExited) {
+            $process.Kill()
+        }
+    }
+}
+
+function Get-DatabaseList {
+    <#
+    .SYNOPSIS
+        Lista todos os bancos de dados não-template
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password
+    )
+    
+    if ([string]::IsNullOrWhiteSpace($HostName) -or 
+        [string]::IsNullOrWhiteSpace($Port) -or 
+        [string]::IsNullOrWhiteSpace($User) -or 
+        [string]::IsNullOrWhiteSpace($Password)) {
+        Write-Log "Dados de conexão inválidos!" -Level Error
+        return @()
+    }
+    
+    $sql = "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$sql`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $output = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao listar bancos" -Level Error
+            return @()
+        }
+        
+        if ($process.ExitCode -eq 0) {
+            $databases = $output -split "`n" | 
+                         ForEach-Object { $_.Trim() } | 
+                         Where-Object { $_ -ne "" }
+            
+            Write-Log "✓ Total de bancos encontrados: $($databases.Count)" -Level Success
+            return $databases
+        }
+        else {
+            Write-Log "✗ Erro ao listar bancos: $stderr" -Level Error
+            return @()
+        }
+    }
+    catch {
+        Write-Log "✗ Erro ao listar bancos: $($_.Exception.Message)" -Level Error
+        return @()
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+#endregion
+
+#region Validation Functions
+function Test-ConnectionParameters {
+    <#
+    .SYNOPSIS
+        Valida parâmetros de conexão
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$HostName,
+        [string]$Port,
+        [string]$User,
+        [string]$Password
+    )
+    
+    $errors = @()
+    
+    if ([string]::IsNullOrWhiteSpace($HostName)) {
+        $errors += "Host não pode ser vazio"
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($Port)) {
+        $errors += "Porta não pode ser vazia"
+    }
+    elseif ($Port -notmatch '^\d+$') {
+        $errors += "Porta deve ser um número"
+    }
+    elseif ([int]$Port -lt 1 -or [int]$Port -gt 65535) {
+        $errors += "Porta deve estar entre 1 e 65535"
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($User)) {
+        $errors += "Usuário não pode ser vazio"
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($Password)) {
+        $errors += "Senha não pode ser vazia"
+    }
+    
+    if ($errors.Count -gt 0) {
+        $message = "Erros de validação:`r`n`r`n" + ($errors -join "`r`n")
+        [System.Windows.Forms.MessageBox]::Show(
+            $message,
+            "Validação",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return $false
+    }
+    
+    return $true
+}
+#endregion
+
+#region Backup Functions
+function Get-BackupType {
+    <#
+    .SYNOPSIS
+        Detecta tipo de arquivo de backup (CUSTOM ou PLAIN)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+    
+    try {
+        if (-not (Test-Path $FilePath)) {
+            return "UNKNOWN"
+        }
+        
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        if ($bytes.Length -ge 5) {
+            $header = [System.Text.Encoding]::ASCII.GetString($bytes[0..4])
+            if ($header -eq "PGDMP") {
+                return "CUSTOM"
+            }
+        }
+        return "PLAIN"
+    }
+    catch {
+        Write-Log "Erro ao detectar tipo de backup: $($_.Exception.Message)" -Level Warning
+        return "PLAIN"
+    }
+}
+
+function Get-DatabaseNameFromBackup {
+    <#
+    .SYNOPSIS
+        Tenta extrair nome do banco do arquivo de backup CUSTOM
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BackupFile,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password
+    )
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.pgRestorePath
+        $psi.Arguments = "-l `"$BackupFile`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $output = $process.StandardOutput.ReadToEnd()
+        
+        if (-not $process.WaitForExit(5000)) {
+            $process.Kill()
+            return ""
+        }
+        
+        $lines = $output -split "`n"
+        foreach ($line in $lines) {
+            if ($line -match ";\s*DATABASE\s+-\s+Name:\s+(\S+)" -or
+                $line -match "CREATE\s+DATABASE\s+(\S+)") {
+                return $matches[1].Trim()
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Erro ao detectar nome do banco: $_"
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+    
+    return ""
+}
+
+function New-PostgreSQLDatabase {
+    <#
+    .SYNOPSIS
+        Cria banco de dados se não existir
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$DatabaseName
+    )
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        # Verificar se existe
+        $checkSql = "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName'"
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$checkSql`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $output = $process.StandardOutput.ReadToEnd().Trim()
+        
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao verificar banco" -Level Error
+            return $false
+        }
+        
+        if ($output -eq "1") {
+            Write-Log "✓ Banco '$DatabaseName' já existe" -Level Info
+            return $true
+        }
+        
+        # Criar banco
+        Write-Log "Criando banco '$DatabaseName'..." -Level Info
+        
+        $createSql = "CREATE DATABASE `"$DatabaseName`""
+        
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"$createSql`""
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $stderr = $process.StandardError.ReadToEnd()
+        
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao criar banco" -Level Error
+            return $false
+        }
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "✓ Banco criado com sucesso" -Level Success
+            return $true
+        }
+        else {
+            Write-Log "✗ Erro ao criar banco: $stderr" -Level Error
+            return $false
+        }
+    }
+    catch {
+        Write-Log "✗ Erro ao criar banco: $($_.Exception.Message)" -Level Error
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+
+function Start-DatabaseBackup {
+    <#
+    .SYNOPSIS
+        Executa backup de banco de dados
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Database,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$OutputPath
+    )
+    
+    Write-Log "========================================" -Level Info
+    Write-Log "INICIANDO BACKUP" -Level Info
+    Write-Log "========================================" -Level Info
+    Write-Log "Host: $HostName`:$Port" -Level Info
+    Write-Log "Banco: $Database" -Level Info
+    Write-Log "Arquivo: $OutputPath" -Level Info
+    Write-Log "========================================" -Level Info
+    
+    try {
+        # Criar diretório se necessário
+        $outputDir = Split-Path $OutputPath -Parent
+        if (-not (Test-Path $outputDir)) {
+            $null = New-Item -ItemType Directory -Path $outputDir -Force
+            Write-Log "Diretório criado: $outputDir" -Level Info
+        }
+        
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.pgDumpPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -F c -b -v -f `"$OutputPath`" `"$Database`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        Write-Log "Executando pg_dump..." -Level Info
+        Write-Log "Comando: pg_dump -h $HostName -p $Port -U $User -F c -b -v -f `"$OutputPath`" `"$Database`"" -Level Info
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        
+        # Ler saída em tempo real
+        while (-not $process.StandardError.EndOfStream) {
+            $line = $process.StandardError.ReadLine()
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Log $line -Level Info
+            }
+        }
+        
+        $process.WaitForExit()
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "========================================" -Level Success
+            Write-Log "✓ Backup concluído com sucesso!" -Level Success
+            
+            if (Test-Path $OutputPath) {
+                $fileInfo = Get-Item $OutputPath
+                $fileSize = $fileInfo.Length / 1MB
+                Write-Log "Arquivo: $($fileInfo.FullName)" -Level Success
+                Write-Log "Tamanho: $([math]::Round($fileSize, 2)) MB" -Level Success
+                Write-Log "Data: $($fileInfo.LastWriteTime)" -Level Success
+            }
+            
+            Write-Log "========================================" -Level Success
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Backup concluído com sucesso!`r`n`r`n" +
+                "Arquivo: $OutputPath`r`n" +
+                "Tamanho: $([math]::Round($fileSize, 2)) MB",
+                "Backup Concluído",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            
+            return $true
+        }
+        else {
+            Write-Log "========================================" -Level Error
+            Write-Log "✗ pg_dump retornou código de erro: $($process.ExitCode)" -Level Error
+            Write-Log "========================================" -Level Error
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Erro ao realizar backup!`r`n`r`nCódigo de erro: $($process.ExitCode)`r`n`r`nVerifique o log para detalhes.",
+                "Erro no Backup",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+            
+            return $false
+        }
+    }
+    catch {
+        Write-Log "✗ Erro no backup: $($_.Exception.Message)" -Level Error
+        [System.Windows.Forms.MessageBox]::Show(
+            "Erro: $($_.Exception.Message)",
+            "Erro",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+#endregion
+
+#region Restore Functions
+function Start-DatabaseRestore {
+    <#
+    .SYNOPSIS
+        Executa restore de banco de dados
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$BackupFile,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$DatabaseName = ""
+    )
+    
+    Write-Log "========================================" -Level Info
+    Write-Log "INICIANDO RESTORE" -Level Info
+    Write-Log "========================================" -Level Info
+    Write-Log "Arquivo: $BackupFile" -Level Info
+    
+    # Verificar tipo de backup
+    $backupType = Get-BackupType -FilePath $BackupFile
+    Write-Log "Tipo de backup: $backupType" -Level Info
+    
+    # Obter nome do banco
+    if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
+        if ($backupType -eq "CUSTOM") {
+            $detectedName = Get-DatabaseNameFromBackup -BackupFile $BackupFile -Password $Password
+            if (-not [string]::IsNullOrWhiteSpace($detectedName)) {
+                Write-Log "Nome detectado automaticamente: $detectedName" -Level Info
+                $DatabaseName = $detectedName
+            }
+        }
+        
+        if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
+            # Solicitar nome via InputBox
+            $DatabaseName = Show-InputDialog -Title "Nome do Banco de Dados" `
+                                            -Prompt "Informe o nome do banco de dados para restauração:" `
+                                            -DefaultValue $detectedName
+            
+            if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
+                Write-Log "Operação cancelada ou nome vazio" -Level Warning
+                return $false
+            }
+        }
+    }
+    
+    Write-Log "Banco de destino: $DatabaseName" -Level Info
+    Write-Log "Host de destino: $HostName`:$Port" -Level Info
+    
+    # Criar banco se necessário
+    Write-Log "Verificando/criando banco de dados..." -Level Info
+    $created = New-PostgreSQLDatabase -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
+    
+    if (-not $created) {
+        Write-Log "✗ Não foi possível criar/acessar o banco de dados" -Level Error
+        return $false
+    }
+    
+    # Executar restore baseado no tipo
+    Write-Log "========================================" -Level Info
+    
+    if ($backupType -eq "CUSTOM") {
+        return Invoke-CustomRestore -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName -BackupFile $BackupFile
+    }
+    else {
+        return Invoke-PlainRestore -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName -BackupFile $BackupFile
+    }
+}
+
+function Invoke-CustomRestore {
+    <#
+    .SYNOPSIS
+        Restaura backup no formato CUSTOM (.backup)
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$HostName,
+        [string]$Port,
+        [string]$User,
+        [string]$Password,
+        [string]$DatabaseName,
+        [string]$BackupFile
+    )
+    
+    Write-Log "Tipo: CUSTOM (.backup)" -Level Info
+    Write-Log "Executando pg_restore..." -Level Info
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.pgRestorePath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v --no-owner --no-acl `"$BackupFile`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.RedirectStandardInput = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        Write-Log "Comando: pg_restore -h $HostName -p $Port -U $User -d $DatabaseName -v --no-owner --no-acl" -Level Info
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $process.StandardInput.Close()
+        
+        # Ler saída em tempo real
+        while (-not $process.StandardError.EndOfStream) {
+            $line = $process.StandardError.ReadLine()
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                # Filtrar avisos comuns que não são erros críticos
+                if ($line -notmatch "WARNING.*already exists" -and 
+                    $line -notmatch "ERROR.*already exists") {
+                    Write-Log $line -Level Info
+                }
+            }
+        }
+        
+        $process.WaitForExit()
+        
+        # Exit codes: 0 = success, 1 = warnings (acceptable)
+        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 1) {
+            Write-Log "========================================" -Level Success
+            Write-Log "✓ Restore concluído!" -Level Success
+            Write-Log "========================================" -Level Success
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Restore concluído com sucesso!`r`n`r`nBanco: $DatabaseName",
+                "Restore Concluído",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            return $true
+        }
+        else {
+            Write-Log "========================================" -Level Warning
+            Write-Log "✗ pg_restore retornou código: $($process.ExitCode)" -Level Warning
+            Write-Log "========================================" -Level Warning
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Restore finalizado com avisos.`r`n`r`nCódigo: $($process.ExitCode)`r`n`r`nVerifique o log para detalhes.",
+                "Restore com Avisos",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return $true  # Considerar sucesso com avisos
+        }
+    }
+    catch {
+        Write-Log "✗ Erro no restore CUSTOM: $($_.Exception.Message)" -Level Error
+        [System.Windows.Forms.MessageBox]::Show(
+            "Erro: $($_.Exception.Message)",
+            "Erro",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+
+function Invoke-PlainRestore {
+    <#
+    .SYNOPSIS
+        Restaura backup no formato PLAIN (.sql)
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$HostName,
+        [string]$Port,
+        [string]$User,
+        [string]$Password,
+        [string]$DatabaseName,
+        [string]$BackupFile
+    )
+    
+    Write-Log "Tipo: PLAIN SQL (.sql)" -Level Info
+    Write-Log "Executando psql..." -Level Info
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -f `"$BackupFile`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.RedirectStandardInput = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        Write-Log "Comando: psql -h $HostName -p $Port -U $User -d $DatabaseName -f `"$BackupFile`"" -Level Info
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $process.StandardInput.Close()
+        
+        # Ler saída em tempo real
+        while (-not $process.StandardError.EndOfStream) {
+            $line = $process.StandardError.ReadLine()
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                Write-Log $line -Level Info
+            }
+        }
+        
+        $process.WaitForExit()
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "========================================" -Level Success
+            Write-Log "✓ Restore concluído!" -Level Success
+            Write-Log "========================================" -Level Success
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Restore concluído com sucesso!`r`n`r`nBanco: $DatabaseName",
+                "Restore Concluído",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            return $true
+        }
+        else {
+            Write-Log "========================================" -Level Warning
+            Write-Log "✗ psql retornou código: $($process.ExitCode)" -Level Warning
+            Write-Log "========================================" -Level Warning
+            
+            [System.Windows.Forms.MessageBox]::Show(
+                "Restore finalizado com avisos.`r`n`r`nCódigo: $($process.ExitCode)`r`n`r`nVerifique o log para detalhes.",
+                "Restore com Avisos",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return $true
+        }
+    }
+    catch {
+        Write-Log "✗ Erro no restore SQL: $($_.Exception.Message)" -Level Error
+        [System.Windows.Forms.MessageBox]::Show(
+            "Erro: $($_.Exception.Message)",
+            "Erro",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+#endregion
+
+#region UI Helper Functions
+function Show-InputDialog {
+    <#
+    .SYNOPSIS
+        Mostra diálogo de input customizado
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Title = "Input",
+        [string]$Prompt = "Digite o valor:",
+        [string]$DefaultValue = ""
+    )
+    
+    $inputForm = New-Object System.Windows.Forms.Form
+    $inputForm.Text = $Title
+    $inputForm.Size = New-Object System.Drawing.Size(400, 150)
+    $inputForm.StartPosition = "CenterScreen"
+    $inputForm.FormBorderStyle = "FixedDialog"
+    $inputForm.MaximizeBox = $false
+    $inputForm.MinimizeBox = $false
+    $inputForm.TopMost = $true
     
     $label = New-Object System.Windows.Forms.Label
-    $label.Text = $Text
-    $label.Location = New-Object System.Drawing.Point($X, $Y)
-    $label.AutoSize = $true
-    $Parent.Controls.Add($label)
-    return $label
+    $label.Text = $Prompt
+    $label.Location = New-Object System.Drawing.Point(10, 20)
+    $label.Size = New-Object System.Drawing.Size(370, 20)
+    $inputForm.Controls.Add($label)
+    
+    $textBox = New-Object System.Windows.Forms.TextBox
+    $textBox.Location = New-Object System.Drawing.Point(10, 45)
+    $textBox.Size = New-Object System.Drawing.Size(360, 20)
+    $textBox.Text = $DefaultValue
+    $inputForm.Controls.Add($textBox)
+    
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = "OK"
+    $okButton.Location = New-Object System.Drawing.Point(215, 75)
+    $okButton.Size = New-Object System.Drawing.Size(75, 25)
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $inputForm.Controls.Add($okButton)
+    $inputForm.AcceptButton = $okButton
+    
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = "Cancelar"
+    $cancelButton.Location = New-Object System.Drawing.Point(295, 75)
+    $cancelButton.Size = New-Object System.Drawing.Size(75, 25)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $inputForm.Controls.Add($cancelButton)
+    $inputForm.CancelButton = $cancelButton
+    
+    $result = $inputForm.ShowDialog()
+    
+    $returnValue = if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        $textBox.Text.Trim()
+    } else {
+        ""
+    }
+    
+    $inputForm.Dispose()
+    
+    return $returnValue
 }
 
-function New-TextBox {
+function Enable-Controls {
+    <#
+    .SYNOPSIS
+        Habilita/desabilita controles durante operações
+    #>
+    [CmdletBinding()]
     param(
-        [int]$X,
-        [int]$Y,
-        [int]$Width = 300,
-        [bool]$Password = $false,
-        [System.Windows.Forms.Control]$Parent
+        [bool]$Enabled = $true
     )
     
-    $textbox = New-Object System.Windows.Forms.TextBox
-    $textbox.Location = New-Object System.Drawing.Point($X, $Y)
-    $textbox.Width = $Width
-    if ($Password) { $textbox.UseSystemPasswordChar = $true }
-    $Parent.Controls.Add($textbox)
-    return $textbox
-}
-
-function New-Button {
-    param(
-        [string]$Text,
-        [int]$X,
-        [int]$Y,
-        [int]$Width = 100,
-        [System.Windows.Forms.Control]$Parent
-    )
+    # Backup Tab
+    if ($script:UI.btnConnectBkp) { $script:UI.btnConnectBkp.Enabled = $Enabled }
+    if ($script:UI.btnBackup) { $script:UI.btnBackup.Enabled = $Enabled }
     
-    $button = New-Object System.Windows.Forms.Button
-    $button.Text = $Text
-    $button.Location = New-Object System.Drawing.Point($X, $Y)
-    $button.Width = $Width
-    $Parent.Controls.Add($button)
-    return $button
-}
-
-# ========================================
-# CRIAR FORMULÁRIO PRINCIPAL
-# ========================================
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "PostgreSQL Manager - Backup & Restore"
-$form.Size = New-Object System.Drawing.Size(750, 700)
-$form.StartPosition = "CenterScreen"
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$form.FormBorderStyle = "FixedDialog"
-$form.MaximizeBox = $false
-
-# ========================================
-# SEÇÃO: CONEXÃO (GroupBox)
-# ========================================
-$groupConn = New-Object System.Windows.Forms.GroupBox
-$groupConn.Text = "Conexão PostgreSQL"
-$groupConn.Location = New-Object System.Drawing.Point(20, 15)
-$groupConn.Size = New-Object System.Drawing.Size(690, 140)
-$form.Controls.Add($groupConn)
-
-# Labels e TextBoxes dentro do GroupBox (coordenadas relativas)
-$lblHost = New-Label -Text "Servidor:" -X 20 -Y 30 -Parent $groupConn
-$script:txtHost = New-TextBox -X 120 -Y 28 -Width 200 -Parent $groupConn
-
-$lblPort = New-Label -Text "Porta:" -X 340 -Y 30 -Parent $groupConn
-$script:txtPort = New-TextBox -X 400 -Y 28 -Width 80 -Parent $groupConn
-
-$lblUser = New-Label -Text "Usuário:" -X 20 -Y 65 -Parent $groupConn
-$script:txtUser = New-TextBox -X 120 -Y 63 -Width 200 -Parent $groupConn
-
-$lblPass = New-Label -Text "Senha:" -X 340 -Y 65 -Parent $groupConn
-$script:txtPass = New-TextBox -X 400 -Y 63 -Width 250 -Password $true -Parent $groupConn
-
-$btnTestar = New-Button -Text "Testar Conexão" -X 20 -Y 100 -Width 150 -Parent $groupConn
-
-# ========================================
-# SEÇÃO: TABS
-# ========================================
-$tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(20, 165)
-$tabControl.Size = New-Object System.Drawing.Size(690, 280)
-$form.Controls.Add($tabControl)
-
-# ========================================
-# TAB 1: RESTAURAR BACKUP
-# ========================================
-$tabRestore = New-Object System.Windows.Forms.TabPage
-$tabRestore.Text = "Restaurar Backup"
-$tabControl.TabPages.Add($tabRestore)
-
-$lblRestoreFile = New-Label -Text "Arquivo de Backup:" -X 20 -Y 20 -Parent $tabRestore
-$script:txtRestoreFile = New-TextBox -X 20 -Y 45 -Width 550 -Parent $tabRestore
-$btnBrowseRestore = New-Button -Text "Buscar..." -X 580 -Y 43 -Width 90 -Parent $tabRestore
-
-$lblRestoreDB = New-Label -Text "Nome do Banco (detectado/editável):" -X 20 -Y 80 -Parent $tabRestore
-$script:txtRestoreDB = New-TextBox -X 20 -Y 105 -Width 400 -Parent $tabRestore
-$btnAnalisar = New-Button -Text "Analisar Backup" -X 430 -Y 103 -Width 140 -Parent $tabRestore
-
-$script:chkDropIfExists = New-Object System.Windows.Forms.CheckBox
-$script:chkDropIfExists.Text = "Recriar banco se já existir (DROP + CREATE)"
-$script:chkDropIfExists.Location = New-Object System.Drawing.Point(20, 140)
-$script:chkDropIfExists.Width = 400
-$script:chkDropIfExists.Checked = $true
-$tabRestore.Controls.Add($script:chkDropIfExists)
-
-$btnRestore = New-Button -Text "Restaurar Agora" -X 20 -Y 180 -Width 150 -Parent $tabRestore
-$btnRestore.Height = 35
-$btnRestore.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-
-# ========================================
-# TAB 2: CRIAR BACKUP
-# ========================================
-$tabBackup = New-Object System.Windows.Forms.TabPage
-$tabBackup.Text = "Criar Backup"
-$tabControl.TabPages.Add($tabBackup)
-
-$lblBackupDB = New-Label -Text "Nome do Banco:" -X 20 -Y 20 -Parent $tabBackup
-$script:txtBackupDB = New-TextBox -X 20 -Y 45 -Width 400 -Parent $tabBackup
-$btnListarBancos = New-Button -Text "Listar Bancos" -X 430 -Y 43 -Width 140 -Parent $tabBackup
-
-$lblBackupFile = New-Label -Text "Salvar Backup em:" -X 20 -Y 80 -Parent $tabBackup
-$script:txtBackupFile = New-TextBox -X 20 -Y 105 -Width 550 -Parent $tabBackup
-$btnBrowseBackup = New-Button -Text "Buscar..." -X 580 -Y 103 -Width 90 -Parent $tabBackup
-
-$lblFormat = New-Label -Text "Formato:" -X 20 -Y 140 -Parent $tabBackup
-$script:cmbFormat = New-Object System.Windows.Forms.ComboBox
-$script:cmbFormat.Location = New-Object System.Drawing.Point(100, 138)
-$script:cmbFormat.Width = 200
-$script:cmbFormat.DropDownStyle = "DropDownList"
-$script:cmbFormat.Items.AddRange(@("Custom (.backup)", "SQL Puro (.sql)"))
-$script:cmbFormat.SelectedIndex = 0
-$tabBackup.Controls.Add($script:cmbFormat)
-
-$btnBackup = New-Button -Text "Criar Backup Agora" -X 20 -Y 180 -Width 150 -Parent $tabBackup
-$btnBackup.Height = 35
-$btnBackup.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-
-# ========================================
-# SEÇÃO: LOG
-# ========================================
-$lblLog = New-Label -Text "Log de Operações:" -X 20 -Y 455 -Parent $form
-$script:txtLog = New-Object System.Windows.Forms.TextBox
-$script:txtLog.Location = New-Object System.Drawing.Point(20, 480)
-$script:txtLog.Size = New-Object System.Drawing.Size(690, 160)
-$script:txtLog.Multiline = $true
-$script:txtLog.ScrollBars = "Vertical"
-$script:txtLog.ReadOnly = $true
-$script:txtLog.Font = New-Object System.Drawing.Font("Consolas", 8)
-$script:txtLog.BackColor = [System.Drawing.Color]::Black
-$script:txtLog.ForeColor = [System.Drawing.Color]::Lime
-$form.Controls.Add($script:txtLog)
-
-# Mensagem inicial no log
-Log "========================================" 
-Log "Sistema iniciado com sucesso!" "INFO"
-Log "Binários PostgreSQL: $pgBin" "INFO"
-Log "Versão: 2.2 Refatorada" "INFO"
-Log "========================================" 
-
-# ========================================
-# EVENTO: TESTAR CONEXÃO
-# ========================================
-$btnTestar.Add_Click({
-    try {
-        Log "Testando conexão..."
-        
-        if (!$script:txtHost.Text -or !$script:txtPort.Text -or !$script:txtUser.Text -or !$script:txtPass.Text) {
-            Log "Preencha todos os campos de conexão!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Preencha todos os campos de conexão!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
-        
-        $env:PGPASSWORD = $script:txtPass.Text
-        
-        $result = & $psql -h $script:txtHost.Text -p $script:txtPort.Text -U $script:txtUser.Text `
-            -d postgres -t -c "SELECT version();" 2>&1
-        
-        if ($LASTEXITCODE -eq 0) {
-            $versao = ($result | Select-Object -First 1).ToString().Trim()
-            Log "Conexão bem-sucedida!" "SUCESSO"
-            Log "Versão: $versao" "INFO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Conexão estabelecida com sucesso!`n`n$versao",
-                "Sucesso",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-        }
-        else {
-            Log "Falha na conexão" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Falha ao conectar ao servidor PostgreSQL.`n`nVerifique os dados de conexão.",
-                "Erro de Conexão",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-        }
-    }
-    catch {
-        Log "Erro ao testar conexão: $($_.Exception.Message)" "ERRO"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
-})
-
-# ========================================
-# EVENTO: BUSCAR ARQUIVO DE RESTORE
-# ========================================
-$btnBrowseRestore.Add_Click({
-    $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = "Arquivos PostgreSQL (*.backup;*.sql;*.dump)|*.backup;*.sql;*.dump|Todos (*.*)|*.*"
-    $dlg.Title = "Selecione o arquivo de backup"
+    # Restore Tab
+    if ($script:UI.btnTestConnection) { $script:UI.btnTestConnection.Enabled = $Enabled }
+    if ($script:UI.btnRestore) { $script:UI.btnRestore.Enabled = $Enabled }
     
-    if ($dlg.ShowDialog() -eq "OK") {
-        $script:txtRestoreFile.Text = $dlg.FileName
-        Log "Arquivo selecionado: $($dlg.FileName)"
-    }
-})
-
-# ========================================
-# EVENTO: ANALISAR BACKUP
-# ========================================
-$btnAnalisar.Add_Click({
-    try {
-        if (!$script:txtRestoreFile.Text -or !(Test-Path $script:txtRestoreFile.Text)) {
-            Log "Selecione um arquivo válido!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Selecione um arquivo de backup válido primeiro!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
+    if ($script:UI.Form) {
+        $script:UI.Form.Cursor = if ($Enabled) { 
+            [System.Windows.Forms.Cursors]::Default 
+        } else { 
+            [System.Windows.Forms.Cursors]::WaitCursor 
         }
+    }
+    
+    [System.Windows.Forms.Application]::DoEvents()
+}
+#endregion
+
+#region UI Creation
+function Initialize-MainForm {
+    <#
+    .SYNOPSIS
+        Cria e configura o formulário principal
+    #>
+    [CmdletBinding()]
+    param()
+    
+    # Criar formulário principal
+    $script:UI.Form = New-Object System.Windows.Forms.Form
+    $script:UI.Form.Text = "$($script:Config.FormTitle) v$($script:Config.Version)"
+    $script:UI.Form.Size = New-Object System.Drawing.Size(700, 600)
+    $script:UI.Form.StartPosition = "CenterScreen"
+    $script:UI.Form.FormBorderStyle = "FixedDialog"
+    $script:UI.Form.MaximizeBox = $false
+    $script:UI.Form.Icon = [System.Drawing.SystemIcons]::Application
+    
+    # Panel superior com informações
+    $panelInfo = New-Object System.Windows.Forms.Panel
+    $panelInfo.Location = New-Object System.Drawing.Point(10, 10)
+    $panelInfo.Size = New-Object System.Drawing.Size(665, 75)
+    $panelInfo.BorderStyle = "FixedSingle"
+    $script:UI.Form.Controls.Add($panelInfo)
+    
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = "PostgreSQL Backup & Restore"
+    $lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $lblTitle.Location = New-Object System.Drawing.Point(10, 10)
+    $lblTitle.Size = New-Object System.Drawing.Size(645, 30)
+    $panelInfo.Controls.Add($lblTitle)
+    
+    $lblVersion = New-Object System.Windows.Forms.Label
+    $lblVersion.Name = "lblVersion"
+    $lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: Verificando..."
+    $lblVersion.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $lblVersion.ForeColor = [System.Drawing.Color]::Gray
+    $lblVersion.Location = New-Object System.Drawing.Point(10, 40)
+    $lblVersion.Size = New-Object System.Drawing.Size(645, 20)
+    $panelInfo.Controls.Add($lblVersion)
+    
+    # Guardar referência do label
+    $script:UI.lblVersion = $lblVersion
+    
+    # TabControl
+    $tabControl = New-Object System.Windows.Forms.TabControl
+    $tabControl.Location = New-Object System.Drawing.Point(10, 95)
+    $tabControl.Size = New-Object System.Drawing.Size(665, 260)
+    $script:UI.Form.Controls.Add($tabControl)
+    
+    # Criar abas
+    Initialize-BackupTab -TabControl $tabControl
+    Initialize-RestoreTab -TabControl $tabControl
+    
+    # RichTextBox Log
+    $lblLog = New-Object System.Windows.Forms.Label
+    $lblLog.Text = "Log de Operações:"
+    $lblLog.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+    $lblLog.Location = New-Object System.Drawing.Point(10, 360)
+    $lblLog.Size = New-Object System.Drawing.Size(200, 20)
+    $script:UI.Form.Controls.Add($lblLog)
+    
+    $btnClearLog = New-Object System.Windows.Forms.Button
+    $btnClearLog.Text = "Limpar Log"
+    $btnClearLog.Location = New-Object System.Drawing.Point(585, 357)
+    $btnClearLog.Size = New-Object System.Drawing.Size(90, 23)
+    $btnClearLog.Add_Click({ Clear-Log })
+    $script:UI.Form.Controls.Add($btnClearLog)
+    
+    $script:UI.rtbLog = New-Object System.Windows.Forms.RichTextBox
+    $script:UI.rtbLog.Location = New-Object System.Drawing.Point(10, 385)
+    $script:UI.rtbLog.Size = New-Object System.Drawing.Size(665, 165)
+    $script:UI.rtbLog.ReadOnly = $true
+    $script:UI.rtbLog.Font = New-Object System.Drawing.Font("Consolas", 9)
+    $script:UI.rtbLog.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+    $script:UI.rtbLog.ForeColor = [System.Drawing.Color]::LightGray
+    $script:UI.rtbLog.BorderStyle = "FixedSingle"
+    $script:UI.Form.Controls.Add($script:UI.rtbLog)
+    
+    # Event handlers
+    $script:UI.Form.Add_Load({
+        Write-Log "========================================" -Level Info
+        Write-Log "PostgreSQL Backup & Restore Pro v$($script:Config.Version)" -Level Info
+        Write-Log "========================================" -Level Info
+        Write-Log "Iniciando aplicação..." -Level Info
         
-        Log "Analisando arquivo de backup..."
-        $ext = [IO.Path]::GetExtension($script:txtRestoreFile.Text).ToLower()
-        
-        if ($ext -eq ".backup" -or $ext -eq ".dump") {
-            Log "Formato: Custom/Dump"
-            
-            $output = & $pg_restore -l $script:txtRestoreFile.Text 2>&1 | Select-String "DATABASE"
-            
-            if ($output) {
-                $dbName = ($output | Select-Object -First 1).ToString() -replace '.*DATABASE\s+(\S+).*', '$1'
-                $script:txtRestoreDB.Text = $dbName
-                Log "Banco detectado: $dbName" "SUCESSO"
-                [System.Windows.Forms.MessageBox]::Show(
-                    "Banco detectado: $dbName`n`nVocê pode editar o nome se necessário.",
-                    "Análise Concluída",
-                    [System.Windows.Forms.MessageBoxButtons]::OK,
-                    [System.Windows.Forms.MessageBoxIcon]::Information
-                )
-            }
-            else {
-                Log "Não foi possível detectar o nome do banco" "AVISO"
-                $script:txtRestoreDB.Text = ""
-                [System.Windows.Forms.MessageBox]::Show(
-                    "Não foi possível detectar o nome do banco automaticamente.`n`nPreencha manualmente.",
-                    "Aviso",
-                    [System.Windows.Forms.MessageBoxButtons]::OK,
-                    [System.Windows.Forms.MessageBoxIcon]::Warning
-                )
+        if (Find-PostgreSQLBinaries) {
+            Write-Log "Aplicação pronta para uso!" -Level Success
+            # Atualizar label de versão
+            if ($script:UI.lblVersion) {
+                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: ✓ Encontrado"
+                $script:UI.lblVersion.ForeColor = [System.Drawing.Color]::Green
             }
         }
         else {
-            Log "Formato: SQL - Especifique o banco manualmente" "AVISO"
-            $script:txtRestoreDB.Text = ""
-            [System.Windows.Forms.MessageBox]::Show(
-                "Arquivo SQL detectado.`n`nEspecifique o nome do banco manualmente.",
-                "Informação",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
+            Write-Log "ATENÇÃO: Configure o PostgreSQL para continuar" -Level Warning
+            # Atualizar label de versão
+            if ($script:UI.lblVersion) {
+                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: ✗ Não encontrado"
+                $script:UI.lblVersion.ForeColor = [System.Drawing.Color]::Red
+            }
         }
-    }
-    catch {
-        Log "Erro ao analisar: $($_.Exception.Message)" "ERRO"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro ao analisar arquivo: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
+        
+        Write-Log "========================================" -Level Info
+    })
+    
+    $script:UI.Form.Add_FormClosing({
+        param($sender, $e)
+        
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "Deseja realmente sair?",
+            "Confirmar Saída",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
         )
-    }
-})
+        
+        if ($result -eq [System.Windows.Forms.DialogResult]::No) {
+            $e.Cancel = $true
+        }
+    })
+}
 
-# ========================================
-# EVENTO: RESTAURAR
-# ========================================
-$btnRestore.Add_Click({
-    try {
-        # Validações
-        if (!$script:txtHost.Text -or !$script:txtPort.Text -or !$script:txtUser.Text -or !$script:txtPass.Text) {
-            Log "Preencha todos os campos de conexão!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Preencha todos os campos de conexão!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
+function Initialize-BackupTab {
+    <#
+    .SYNOPSIS
+        Cria aba de Backup
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.TabControl]$TabControl
+    )
+    
+    $tabBackup = New-Object System.Windows.Forms.TabPage
+    $tabBackup.Text = "Backup"
+    $tabBackup.UseVisualStyleBackColor = $true
+    $TabControl.Controls.Add($tabBackup)
+    
+    # GroupBox Conexão
+    $grpConnection = New-Object System.Windows.Forms.GroupBox
+    $grpConnection.Text = "Conexão com Servidor"
+    $grpConnection.Location = New-Object System.Drawing.Point(10, 10)
+    $grpConnection.Size = New-Object System.Drawing.Size(635, 90)
+    $tabBackup.Controls.Add($grpConnection)
+    
+    # Host
+    $lblHostBkp = New-Object System.Windows.Forms.Label
+    $lblHostBkp.Text = "Host:"
+    $lblHostBkp.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblHostBkp.Location = New-Object System.Drawing.Point(15, 25)
+    $lblHostBkp.Size = New-Object System.Drawing.Size(50, 20)
+    $lblHostBkp.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblHostBkp)
+    
+    $script:UI.cboHostBkp = New-Object System.Windows.Forms.ComboBox
+    $script:UI.cboHostBkp.Location = New-Object System.Drawing.Point(75, 23)
+    $script:UI.cboHostBkp.Size = New-Object System.Drawing.Size(230, 21)
+    $script:UI.cboHostBkp.DropDownStyle = "DropDown"
+    $script:UI.cboHostBkp.Items.AddRange(@($script:PredefinedHosts.Keys))
+    $script:UI.cboHostBkp.Add_SelectedIndexChanged({
+        $selectedHost = $script:UI.cboHostBkp.SelectedItem
+        if ($script:PredefinedHosts.ContainsKey($selectedHost)) {
+            $config = $script:PredefinedHosts[$selectedHost]
+            $script:UI.txtPortBkp.Text = $config.Port
+            $script:UI.txtUserBkp.Text = $config.User
+            $script:UI.txtPassBkp.Text = $config.Pass
+            Write-Log "Host pré-configurado selecionado: $selectedHost" -Level Info
+        }
+    })
+    $grpConnection.Controls.Add($script:UI.cboHostBkp)
+    
+    # Port
+    $lblPortBkp = New-Object System.Windows.Forms.Label
+    $lblPortBkp.Text = "Porta:"
+    $lblPortBkp.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblPortBkp.Location = New-Object System.Drawing.Point(315, 25)
+    $lblPortBkp.Size = New-Object System.Drawing.Size(50, 20)
+    $lblPortBkp.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblPortBkp)
+    
+    $script:UI.txtPortBkp = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtPortBkp.Location = New-Object System.Drawing.Point(375, 23)
+    $script:UI.txtPortBkp.Size = New-Object System.Drawing.Size(50, 20)
+    $script:UI.txtPortBkp.Text = "5432"
+    $script:UI.txtPortBkp.TextAlign = [System.Windows.Forms.HorizontalAlignment]::Center
+    $grpConnection.Controls.Add($script:UI.txtPortBkp)
+    
+    # User
+    $lblUserBkp = New-Object System.Windows.Forms.Label
+    $lblUserBkp.Text = "Usuário:"
+    $lblUserBkp.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblUserBkp.Location = New-Object System.Drawing.Point(15, 53)
+    $lblUserBkp.Size = New-Object System.Drawing.Size(60, 20)
+    $lblUserBkp.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblUserBkp)
+    
+    $script:UI.txtUserBkp = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtUserBkp.Location = New-Object System.Drawing.Point(75, 53)
+    $script:UI.txtUserBkp.Size = New-Object System.Drawing.Size(230, 20)
+    $grpConnection.Controls.Add($script:UI.txtUserBkp)
+    
+    # Password
+    $lblPassBkp = New-Object System.Windows.Forms.Label
+    $lblPassBkp.Text = "Senha:"
+    $lblPassBkp.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblPassBkp.Location = New-Object System.Drawing.Point(315, 53)
+    $lblPassBkp.Size = New-Object System.Drawing.Size(60, 20)
+    $lblPassBkp.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblPassBkp)
+    
+    $script:UI.txtPassBkp = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtPassBkp.Location = New-Object System.Drawing.Point(375, 53)
+    $script:UI.txtPassBkp.Size = New-Object System.Drawing.Size(135, 20)
+    $script:UI.txtPassBkp.PasswordChar = '●'
+    $grpConnection.Controls.Add($script:UI.txtPassBkp)
+    
+    # Botão Conectar
+    $script:UI.btnConnectBkp = New-Object System.Windows.Forms.Button
+    $script:UI.btnConnectBkp.Text = "Conectar"
+    $script:UI.btnConnectBkp.Location = New-Object System.Drawing.Point(520, 23)
+    $script:UI.btnConnectBkp.Size = New-Object System.Drawing.Size(100, 50)
+    $script:UI.btnConnectBkp.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $script:UI.btnConnectBkp.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $script:UI.btnConnectBkp.ForeColor = [System.Drawing.Color]::White
+    $script:UI.btnConnectBkp.FlatStyle = "Flat"
+    $script:UI.btnConnectBkp.Add_Click({
+        $hostname = $script:UI.cboHostBkp.Text
+        $port = $script:UI.txtPortBkp.Text
+        $user = $script:UI.txtUserBkp.Text
+        $pass = $script:UI.txtPassBkp.Text
+        
+        if (-not (Test-ConnectionParameters -HostName $hostname -Port $port -User $user -Password $pass)) {
             return
         }
         
-        if (!$script:txtRestoreFile.Text -or !(Test-Path $script:txtRestoreFile.Text)) {
-            Log "Arquivo de backup não encontrado!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Selecione um arquivo de backup válido!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
+        Enable-Controls -Enabled $false
         
-        if (!$script:txtRestoreDB.Text) {
-            Log "Nome do banco não especificado!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Especifique o nome do banco de destino!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
-        
-        $dbName = $script:txtRestoreDB.Text
-        $env:PGPASSWORD = $script:txtPass.Text
-        
-        # Verificar se banco existe
-        Log "Verificando banco '$dbName'..."
-        $exists = & $psql -h $script:txtHost.Text -p $script:txtPort.Text -U $script:txtUser.Text `
-            -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='$dbName';" 2>&1
-        
-        if ($exists -match "1") {
-            if ($script:chkDropIfExists.Checked) {
-                $resp = [System.Windows.Forms.MessageBox]::Show(
-                    "O banco '$dbName' já existe e será REMOVIDO e RECRIADO.`n`nTodos os dados atuais serão perdidos!`n`nDeseja continuar?",
-                    "ATENÇÃO",
-                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                    [System.Windows.Forms.MessageBoxIcon]::Warning
-                )
+        try {
+            Write-Log "Conectando ao servidor..." -Level Info
+            
+            if (Test-PostgreSQLConnection -HostName $hostname -Port $port -User $user -Password $pass) {
+                Write-Log "Listando bancos de dados..." -Level Info
+                $databases = Get-DatabaseList -HostName $hostname -Port $port -User $user -Password $pass
                 
-                if ($resp -ne "Yes") {
-                    Log "Operação cancelada pelo usuário" "AVISO"
-                    return
+                $script:UI.cboDBBkp.Items.Clear()
+                if ($databases.Count -gt 0) {
+                    $script:UI.cboDBBkp.Items.AddRange($databases)
+                    $script:UI.cboDBBkp.SelectedIndex = 0
                 }
-                
-                Log "Encerrando conexões ativas..."
-                & $psql -h $script:txtHost.Text -p $script:txtPort.Text -U $script:txtUser.Text -d postgres -c "
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname='$dbName' AND pid <> pg_backend_pid();
-                " 2>&1 | Out-Null
-            }
-            else {
-                Log "Banco já existe e opção de recriar está desmarcada" "ERRO"
-                [System.Windows.Forms.MessageBox]::Show(
-                    "O banco '$dbName' já existe.`n`nMarque a opção 'Recriar banco se já existir' ou altere o nome.",
-                    "Banco Existente",
-                    [System.Windows.Forms.MessageBoxButtons]::OK,
-                    [System.Windows.Forms.MessageBoxIcon]::Warning
-                )
-                return
             }
         }
-        
-        $ext = [IO.Path]::GetExtension($script:txtRestoreFile.Text).ToLower()
-        
-        Log "========================================"
-        Log "Iniciando restauração..." "INFO"
-        Log "Banco: $dbName" "INFO"
-        Log "Arquivo: $($script:txtRestoreFile.Text)" "INFO"
-        Log "========================================"
-        
-        if ($ext -eq ".backup" -or $ext -eq ".dump") {
-            Log "Executando pg_restore..."
-            
-            $proc = Start-Process $pg_restore -Wait -NoNewWindow -PassThru -ArgumentList @(
-                "-h", $script:txtHost.Text,
-                "-p", $script:txtPort.Text,
-                "-U", $script:txtUser.Text,
-                "-d", "postgres",
-                "-C",
-                "-c",
-                "--if-exists",
-                "--no-owner",
-                "--no-privileges",
-                "-v",
-                $script:txtRestoreFile.Text
-            )
+        finally {
+            Enable-Controls -Enabled $true
         }
-        else {
-            Log "Executando psql para arquivo SQL..."
-            
-            $proc = Start-Process $psql -Wait -NoNewWindow -PassThru -ArgumentList @(
-                "-h", $script:txtHost.Text,
-                "-p", $script:txtPort.Text,
-                "-U", $script:txtUser.Text,
-                "-d", "postgres",
-                "-f", $script:txtRestoreFile.Text
-            )
-        }
-        
-        Log "========================================"
-        
-        if ($proc.ExitCode -eq 0) {
-            Log "Restauração concluída com SUCESSO!" "SUCESSO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Banco '$dbName' restaurado com sucesso!",
-                "Sucesso",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-        }
-        else {
-            Log "ERRO na restauração (Código: $($proc.ExitCode))" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Erro durante a restauração!`n`nCódigo: $($proc.ExitCode)`n`nVerifique o log.",
-                "Erro",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-        }
-    }
-    catch {
-        Log "Exceção: $($_.Exception.Message)" "ERRO"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
-})
-
-# ========================================
-# EVENTO: LISTAR BANCOS
-# ========================================
-$btnListarBancos.Add_Click({
-    try {
-        Log "Listando bancos disponíveis..."
-        
-        if (!$script:txtHost.Text -or !$script:txtPort.Text -or !$script:txtUser.Text -or !$script:txtPass.Text) {
-            Log "Preencha os campos de conexão primeiro!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Preencha os campos de conexão primeiro!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
-        
-        $env:PGPASSWORD = $script:txtPass.Text
-        
-        $bancos = & $psql -h $script:txtHost.Text -p $script:txtPort.Text -U $script:txtUser.Text `
-            -d postgres -t -c "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;" 2>&1
-        
-        if ($LASTEXITCODE -eq 0) {
-            $listaBancos = ($bancos | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim() }) -join "`n"
-            Log "Bancos encontrados:" "SUCESSO"
-            Log $listaBancos "INFO"
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                "Bancos disponíveis:`n`n$listaBancos",
-                "Lista de Bancos",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-        }
-        else {
-            Log "Erro ao listar bancos" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Erro ao listar bancos.`n`nVerifique a conexão.",
-                "Erro",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-        }
-    }
-    catch {
-        Log "Erro: $($_.Exception.Message)" "ERRO"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    }
-})
-
-# ========================================
-# EVENTO: BUSCAR LOCAL PARA SALVAR BACKUP
-# ========================================
-$btnBrowseBackup.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = "Backup Custom (*.backup)|*.backup|SQL Puro (*.sql)|*.sql"
-    $dlg.Title = "Salvar backup como"
-    $dlg.FileName = "backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    })
+    $grpConnection.Controls.Add($script:UI.btnConnectBkp)
     
-    if ($dlg.ShowDialog() -eq "OK") {
-        $script:txtBackupFile.Text = $dlg.FileName
-        Log "Destino: $($dlg.FileName)"
-    }
-})
-
-# ========================================
-# EVENTO: CRIAR BACKUP
-# ========================================
-$btnBackup.Add_Click({
-    try {
-        # Validações
-        if (!$script:txtHost.Text -or !$script:txtPort.Text -or !$script:txtUser.Text -or !$script:txtPass.Text) {
-            Log "Preencha todos os campos de conexão!" "ERRO"
+    # GroupBox Banco de Dados
+    $grpDatabase = New-Object System.Windows.Forms.GroupBox
+    $grpDatabase.Text = "Selecionar Banco de Dados"
+    $grpDatabase.Location = New-Object System.Drawing.Point(10, 110)
+    $grpDatabase.Size = New-Object System.Drawing.Size(635, 60)
+    $tabBackup.Controls.Add($grpDatabase)
+    
+    $lblDBBkp = New-Object System.Windows.Forms.Label
+    $lblDBBkp.Text = "Banco:"
+    $lblDBBkp.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblDBBkp.Location = New-Object System.Drawing.Point(15, 28)
+    $lblDBBkp.Size = New-Object System.Drawing.Size(60, 20)
+    $lblDBBkp.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpDatabase.Controls.Add($lblDBBkp)
+    
+    $script:UI.cboDBBkp = New-Object System.Windows.Forms.ComboBox
+    $script:UI.cboDBBkp.Location = New-Object System.Drawing.Point(75, 26)
+    $script:UI.cboDBBkp.Size = New-Object System.Drawing.Size(330, 21)
+    $script:UI.cboDBBkp.DropDownStyle = "DropDownList"
+    $grpDatabase.Controls.Add($script:UI.cboDBBkp)
+    
+    # Botão Backup
+    $script:UI.btnBackup = New-Object System.Windows.Forms.Button
+    $script:UI.btnBackup.Text = "🗄 Realizar Backup"
+    $script:UI.btnBackup.Location = New-Object System.Drawing.Point(415, 23)
+    $script:UI.btnBackup.Size = New-Object System.Drawing.Size(205, 30)
+    $script:UI.btnBackup.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $script:UI.btnBackup.BackColor = [System.Drawing.Color]::FromArgb(0, 150, 0)
+    $script:UI.btnBackup.ForeColor = [System.Drawing.Color]::White
+    $script:UI.btnBackup.FlatStyle = "Flat"
+    $script:UI.btnBackup.Add_Click({
+        if ($script:UI.cboDBBkp.SelectedIndex -eq -1) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Preencha todos os campos de conexão!",
-                "Atenção",
+                "Selecione um banco de dados!",
+                "Validação",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
             )
             return
         }
         
-        if (!$script:txtBackupDB.Text) {
-            Log "Nome do banco não especificado!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Especifique o nome do banco!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
+        # Diálogo para salvar arquivo
+        $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $saveDialog.Title = "Salvar backup como"
+        $saveDialog.Filter = "Backup PostgreSQL (*.backup)|*.backup|Arquivo SQL (*.sql)|*.sql|Todos os arquivos (*.*)|*.*"
+        $saveDialog.FilterIndex = 1
+        $saveDialog.FileName = "$($script:UI.cboDBBkp.SelectedItem)_$(Get-Date -Format 'yyyyMMdd_HHmmss').backup"
+        $saveDialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
         
-        if (!$script:txtBackupFile.Text) {
-            Log "Destino do backup não especificado!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "Especifique onde salvar o backup!",
-                "Atenção",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-            return
-        }
-        
-        $dbName = $script:txtBackupDB.Text
-        $env:PGPASSWORD = $script:txtPass.Text
-        
-        # Verificar se banco existe
-        Log "Verificando banco '$dbName'..."
-        $exists = & $psql -h $script:txtHost.Text -p $script:txtPort.Text -U $script:txtUser.Text `
-            -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='$dbName';" 2>&1
-        
-        if ($exists -notmatch "1") {
-            Log "Banco '$dbName' não existe!" "ERRO"
-            [System.Windows.Forms.MessageBox]::Show(
-                "O banco '$dbName' não foi encontrado!",
-                "Erro",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-            return
-        }
-        
-        Log "========================================"
-        Log "Iniciando backup..." "INFO"
-        Log "Banco: $dbName" "INFO"
-        Log "Destino: $($script:txtBackupFile.Text)" "INFO"
-        Log "========================================"
-        
-        if ($script:cmbFormat.SelectedIndex -eq 0) {
-            # Formato Custom
-            Log "Formato: Custom (.backup)"
+        if ($saveDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            Enable-Controls -Enabled $false
             
-            $proc = Start-Process $pg_dump -Wait -NoNewWindow -PassThru -ArgumentList @(
-                "-h", $script:txtHost.Text,
-                "-p", $script:txtPort.Text,
-                "-U", $script:txtUser.Text,
-                "-F", "c",
-                "-b",
-                "-v",
-                "-f", $script:txtBackupFile.Text,
-                $dbName
-            )
-        }
-        else {
-            # Formato SQL
-            Log "Formato: SQL Puro (.sql)"
-            
-            $proc = Start-Process $pg_dump -Wait -NoNewWindow -PassThru -ArgumentList @(
-                "-h", $script:txtHost.Text,
-                "-p", $script:txtPort.Text,
-                "-U", $script:txtUser.Text,
-                "-f", $script:txtBackupFile.Text,
-                $dbName
-            )
-        }
-        
-        Log "========================================"
-        
-        if ($proc.ExitCode -eq 0) {
-            $fileInfo = Get-Item $script:txtBackupFile.Text
-            $tamanho = "{0:N2} MB" -f ($fileInfo.Length / 1MB)
-            
-            Log "Backup concluído com SUCESSO!" "SUCESSO"
-            Log "Tamanho: $tamanho" "INFO"
-            
-            $resposta = [System.Windows.Forms.MessageBox]::Show(
-                "Backup criado com sucesso!`n`nArquivo: $($script:txtBackupFile.Text)`nTamanho: $tamanho`n`nDeseja abrir a pasta?",
-                "Sucesso",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-            
-            if ($resposta -eq "Yes") {
-                $pasta = Split-Path $script:txtBackupFile.Text
-                Start-Process explorer.exe -ArgumentList $pasta
+            try {
+                Start-DatabaseBackup -HostName $script:UI.cboHostBkp.Text `
+                                    -Port $script:UI.txtPortBkp.Text `
+                                    -User $script:UI.txtUserBkp.Text `
+                                    -Password $script:UI.txtPassBkp.Text `
+                                    -Database $script:UI.cboDBBkp.SelectedItem `
+                                    -OutputPath $saveDialog.FileName
+            }
+            finally {
+                Enable-Controls -Enabled $true
             }
         }
-        else {
-            Log "ERRO no backup (Código: $($proc.ExitCode))" "ERRO"
+    })
+    $grpDatabase.Controls.Add($script:UI.btnBackup)
+}
+
+function Initialize-RestoreTab {
+    <#
+    .SYNOPSIS
+        Cria aba de Restore
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.TabControl]$TabControl
+    )
+    
+    $tabRestore = New-Object System.Windows.Forms.TabPage
+    $tabRestore.Text = "Restaurar"
+    $tabRestore.UseVisualStyleBackColor = $true
+    $TabControl.Controls.Add($tabRestore)
+    
+    # GroupBox Conexão
+    $grpConnection = New-Object System.Windows.Forms.GroupBox
+    $grpConnection.Text = "Conexão com Servidor de Destino"
+    $grpConnection.Location = New-Object System.Drawing.Point(10, 10)
+    $grpConnection.Size = New-Object System.Drawing.Size(635, 90)
+    $tabRestore.Controls.Add($grpConnection)
+    
+    # Host
+    $lblHostRestore = New-Object System.Windows.Forms.Label
+    $lblHostRestore.Text = "Host:"
+    $lblHostRestore.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblHostRestore.Location = New-Object System.Drawing.Point(15, 25)
+    $lblHostRestore.Size = New-Object System.Drawing.Size(50, 20)
+    $lblHostRestore.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblHostRestore)
+    
+    $script:UI.txtHostRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtHostRestore.Location = New-Object System.Drawing.Point(75, 23)
+    $script:UI.txtHostRestore.Size = New-Object System.Drawing.Size(230, 20)
+    $grpConnection.Controls.Add($script:UI.txtHostRestore)
+    
+    # Port
+    $lblPortRestore = New-Object System.Windows.Forms.Label
+    $lblPortRestore.Text = "Porta:"
+    $lblPortRestore.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblPortRestore.Location = New-Object System.Drawing.Point(315, 25)
+    $lblPortRestore.Size = New-Object System.Drawing.Size(50, 20)
+    $lblPortRestore.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblPortRestore)
+    
+    $script:UI.txtPortRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtPortRestore.Location = New-Object System.Drawing.Point(375, 23)
+    $script:UI.txtPortRestore.Size = New-Object System.Drawing.Size(50, 20)
+    $script:UI.txtPortRestore.Text = "5432"
+    $script:UI.txtPortRestore.TextAlign = [System.Windows.Forms.HorizontalAlignment]::Center
+    $grpConnection.Controls.Add($script:UI.txtPortRestore)
+    
+    # User
+    $lblUserRestore = New-Object System.Windows.Forms.Label
+    $lblUserRestore.Text = "Usuário:"
+    $lblUserRestore.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblUserRestore.Location = New-Object System.Drawing.Point(15, 53)
+    $lblUserRestore.Size = New-Object System.Drawing.Size(60, 20)
+    $lblUserRestore.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblUserRestore)
+    
+    $script:UI.txtUserRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtUserRestore.Location = New-Object System.Drawing.Point(75, 53)
+    $script:UI.txtUserRestore.Size = New-Object System.Drawing.Size(230, 20)
+    $grpConnection.Controls.Add($script:UI.txtUserRestore)
+    
+    # Password
+    $lblPassRestore = New-Object System.Windows.Forms.Label
+    $lblPassRestore.Text = "Senha:"
+    $lblPassRestore.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblPassRestore.Location = New-Object System.Drawing.Point(315, 53)
+    $lblPassRestore.Size = New-Object System.Drawing.Size(60, 20)
+    $lblPassRestore.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpConnection.Controls.Add($lblPassRestore)
+    
+    $script:UI.txtPassRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtPassRestore.Location = New-Object System.Drawing.Point(375, 53)
+    $script:UI.txtPassRestore.Size = New-Object System.Drawing.Size(135, 20)
+    $script:UI.txtPassRestore.PasswordChar = '●'
+    $grpConnection.Controls.Add($script:UI.txtPassRestore)
+    
+    # Botão Test Connection
+    $script:UI.btnTestConnection = New-Object System.Windows.Forms.Button
+    $script:UI.btnTestConnection.Text = "Testar Conexão"
+    $script:UI.btnTestConnection.Location = New-Object System.Drawing.Point(520, 23)
+    $script:UI.btnTestConnection.Size = New-Object System.Drawing.Size(100, 50)
+    $script:UI.btnTestConnection.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $script:UI.btnTestConnection.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $script:UI.btnTestConnection.ForeColor = [System.Drawing.Color]::White
+    $script:UI.btnTestConnection.FlatStyle = "Flat"
+    $script:UI.btnTestConnection.Add_Click({
+        $hostname = $script:UI.txtHostRestore.Text
+        $port = $script:UI.txtPortRestore.Text
+        $user = $script:UI.txtUserRestore.Text
+        $pass = $script:UI.txtPassRestore.Text
+        
+        if (-not (Test-ConnectionParameters -HostName $hostname -Port $port -User $user -Password $pass)) {
+            return
+        }
+        
+        Enable-Controls -Enabled $false
+        
+        try {
+            Test-PostgreSQLConnection -HostName $hostname -Port $port -User $user -Password $pass
+        }
+        finally {
+            Enable-Controls -Enabled $true
+        }
+    })
+    $grpConnection.Controls.Add($script:UI.btnTestConnection)
+    
+    # GroupBox Arquivo
+    $grpFile = New-Object System.Windows.Forms.GroupBox
+    $grpFile.Text = "Arquivo de Backup"
+    $grpFile.Location = New-Object System.Drawing.Point(10, 110)
+    $grpFile.Size = New-Object System.Drawing.Size(635, 60)
+    $tabRestore.Controls.Add($grpFile)
+    
+    $lblFileRestore = New-Object System.Windows.Forms.Label
+    $lblFileRestore.Text = "Arquivo:"
+    $lblFileRestore.Font = New-Object System.Drawing.Font("Tahoma", 9, [System.Drawing.FontStyle]::Bold)
+    $lblFileRestore.Location = New-Object System.Drawing.Point(15, 28)
+    $lblFileRestore.Size = New-Object System.Drawing.Size(60, 20)
+    $lblFileRestore.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $grpFile.Controls.Add($lblFileRestore)
+    
+    $script:UI.txtFileRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtFileRestore.Location = New-Object System.Drawing.Point(75, 26)
+    $script:UI.txtFileRestore.Size = New-Object System.Drawing.Size(435, 20)
+    $script:UI.txtFileRestore.ReadOnly = $true
+    $script:UI.txtFileRestore.BackColor = [System.Drawing.Color]::White
+    $grpFile.Controls.Add($script:UI.txtFileRestore)
+    
+    # Botão Browse
+    $btnBrowseFile = New-Object System.Windows.Forms.Button
+    $btnBrowseFile.Text = "..."
+    $btnBrowseFile.Location = New-Object System.Drawing.Point(515, 24)
+    $btnBrowseFile.Size = New-Object System.Drawing.Size(35, 23)
+    $btnBrowseFile.Add_Click({
+        $openDialog = New-Object System.Windows.Forms.OpenFileDialog
+        $openDialog.Title = "Selecione o arquivo de backup"
+        $openDialog.Filter = "Arquivos de Backup (*.backup;*.sql;*.dump)|*.backup;*.sql;*.dump|Todos os arquivos (*.*)|*.*"
+        $openDialog.FilterIndex = 1
+        $openDialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+        
+        if ($openDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $script:UI.txtFileRestore.Text = $openDialog.FileName
+            Write-Log "Arquivo selecionado: $(Split-Path $openDialog.FileName -Leaf)" -Level Info
+            
+            # Detectar tipo
+            $type = Get-BackupType -FilePath $openDialog.FileName
+            Write-Log "Tipo detectado: $type" -Level Info
+        }
+    })
+    $grpFile.Controls.Add($btnBrowseFile)
+    
+    # Botão Restore
+    $script:UI.btnRestore = New-Object System.Windows.Forms.Button
+    $script:UI.btnRestore.Text = "🔄 Restaurar Backup"
+    $script:UI.btnRestore.Location = New-Object System.Drawing.Point(10, 180)
+    $script:UI.btnRestore.Size = New-Object System.Drawing.Size(635, 40)
+    $script:UI.btnRestore.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+    $script:UI.btnRestore.BackColor = [System.Drawing.Color]::FromArgb(200, 100, 0)
+    $script:UI.btnRestore.ForeColor = [System.Drawing.Color]::White
+    $script:UI.btnRestore.FlatStyle = "Flat"
+    $script:UI.btnRestore.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($script:UI.txtFileRestore.Text)) {
             [System.Windows.Forms.MessageBox]::Show(
-                "Erro durante o backup!`n`nCódigo: $($proc.ExitCode)",
+                "Selecione um arquivo de backup!",
+                "Validação",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            return
+        }
+        
+        if (-not (Test-Path $script:UI.txtFileRestore.Text)) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Arquivo não encontrado!`r`n`r`n$($script:UI.txtFileRestore.Text)",
                 "Erro",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
+            return
         }
-    }
-    catch {
-        Log "Exceção: $($_.Exception.Message)" "ERRO"
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
+        
+        $hostname = $script:UI.txtHostRestore.Text
+        $port = $script:UI.txtPortRestore.Text
+        $user = $script:UI.txtUserRestore.Text
+        $pass = $script:UI.txtPassRestore.Text
+        
+        if (-not (Test-ConnectionParameters -HostName $hostname -Port $port -User $user -Password $pass)) {
+            return
+        }
+        
+        # Confirmar operação
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "ATENÇÃO: Esta operação irá restaurar o backup no servidor.`r`n`r`n" +
+            "Servidor: $hostname`:$port`r`n" +
+            "Arquivo: $(Split-Path $script:UI.txtFileRestore.Text -Leaf)`r`n`r`n" +
+            "Deseja continuar?",
+            "Confirmar Restore",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
         )
+        
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            Enable-Controls -Enabled $false
+            
+            try {
+                Start-DatabaseRestore -HostName $hostname `
+                                     -Port $port `
+                                     -User $user `
+                                     -Password $pass `
+                                     -BackupFile $script:UI.txtFileRestore.Text
+            }
+            finally {
+                Enable-Controls -Enabled $true
+            }
+        }
+    })
+    $tabRestore.Controls.Add($script:UI.btnRestore)
+}
+#endregion
+
+#region Main Execution
+try {
+    Write-Verbose "Inicializando aplicação..."
+    Initialize-MainForm
+    
+    Write-Verbose "Exibindo formulário..."
+    [void]$script:UI.Form.ShowDialog()
+    
+    Write-Verbose "Aplicação encerrada"
+}
+catch {
+    $errorMsg = "Erro fatal na aplicação: $($_.Exception.Message)`r`n`r`n$($_.ScriptStackTrace)"
+    
+    [System.Windows.Forms.MessageBox]::Show(
+        $errorMsg,
+        "Erro Fatal",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    
+    Write-Error $errorMsg
+    exit 1
+}
+finally {
+    # Cleanup
+    if ($script:UI.Form) {
+        $script:UI.Form.Dispose()
     }
-})
-
-# ========================================
-# EXEMPLOS NO LOG
-# ========================================
-Log "EXEMPLOS DE USO VIA LINHA DE COMANDO:" "INFO"
-Log "Backup: `$env:PGPASSWORD='senha'; pg_dump -h host -U user -p 5432 -F c -f arquivo.backup banco"
-Log "Restore: `$env:PGPASSWORD='senha'; pg_restore -h host -U user -p 5432 -C -d postgres arquivo.backup"
-Log "========================================"
-
-# ========================================
-# EXIBIR FORMULÁRIO
-# ========================================
-[void]$form.ShowDialog()
+}
+#endregion
