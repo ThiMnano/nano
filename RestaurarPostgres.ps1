@@ -30,12 +30,12 @@ $script:PredefinedHosts = @{
     }
     "cloud1.sistemasnano.com.br" = @{
         Port = "5432"
-        User = "webadmin"
+        User = "postgres"
         Pass = ""
     }
     "cloud2.sistemasnano.com.br" = @{
         Port = "5432"
-        User = ""
+        User = "postgres"
         Pass = ""
     }
 }
@@ -1742,3 +1742,4 @@ finally {
     }
 }
 #endregion
+
