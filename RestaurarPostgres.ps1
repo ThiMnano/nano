@@ -19,7 +19,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "2.2"  # Versão atualizada com melhorias na criação de banco
+    Version = "3.1"  # Bugfix: already exists tratado corretamente
 }
 
 $script:PredefinedHosts = @{
@@ -40,11 +40,10 @@ $script:PredefinedHosts = @{
     }
 }
 
-# UI Controls - declarados em escopo de script para acesso global
+# UI Controls
 $script:UI = @{
     Form = $null
     rtbLog = $null
-    # Backup Tab
     cboHostBkp = $null
     txtPortBkp = $null
     txtUserBkp = $null
@@ -52,7 +51,6 @@ $script:UI = @{
     cboDBBkp = $null
     btnConnectBkp = $null
     btnBackup = $null
-    # Restore Tab
     txtHostRestore = $null
     txtPortRestore = $null
     txtUserRestore = $null
@@ -65,10 +63,6 @@ $script:UI = @{
 
 #region Logging Functions
 function Write-Log {
-    <#
-    .SYNOPSIS
-        Escreve mensagem no log com timestamp
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -112,10 +106,6 @@ function Write-Log {
 }
 
 function Clear-Log {
-    <#
-    .SYNOPSIS
-        Limpa o log
-    #>
     [CmdletBinding()]
     param()
     
@@ -127,12 +117,6 @@ function Clear-Log {
 
 #region PostgreSQL Binary Detection
 function Find-PostgreSQLBinaries {
-    <#
-    .SYNOPSIS
-        Detecta automaticamente os binários do PostgreSQL
-    .DESCRIPTION
-        Procura em múltiplos locais comuns e no registro do Windows
-    #>
     [CmdletBinding()]
     param()
     
@@ -140,7 +124,7 @@ function Find-PostgreSQLBinaries {
     
     $searchPaths = @()
     
-    # 1. Registro do Windows (instalações oficiais)
+    # Registro do Windows
     try {
         $regPath = "HKLM:\SOFTWARE\PostgreSQL\Installations"
         if (Test-Path $regPath) {
@@ -151,20 +135,15 @@ function Find-PostgreSQLBinaries {
                     if ($props.BaseDirectory) {
                         $binPath = Join-Path $props.BaseDirectory "bin"
                         $searchPaths += $binPath
-                        Write-Verbose "Encontrado no registro: $binPath"
                     }
                 }
-                catch {
-                    Write-Verbose "Erro ao ler instalação: $_"
-                }
+                catch { }
             }
         }
     }
-    catch {
-        Write-Log "Aviso: Não foi possível acessar registro - $($_.Exception.Message)" -Level Warning
-    }
+    catch { }
     
-    # 2. Program Files (64-bit)
+    # Program Files
     $programFiles = ${env:ProgramFiles}
     $pgFolder = Join-Path $programFiles "PostgreSQL"
     if (Test-Path $pgFolder) {
@@ -172,12 +151,11 @@ function Find-PostgreSQLBinaries {
             $binPath = Join-Path $_.FullName "bin"
             if (Test-Path $binPath) {
                 $searchPaths += $binPath
-                Write-Verbose "Encontrado em Program Files: $binPath"
             }
         }
     }
     
-    # 3. Program Files (x86)
+    # Program Files (x86)
     if (${env:ProgramFiles(x86)}) {
         $pgFolderX86 = Join-Path ${env:ProgramFiles(x86)} "PostgreSQL"
         if (Test-Path $pgFolderX86) {
@@ -185,13 +163,12 @@ function Find-PostgreSQLBinaries {
                 $binPath = Join-Path $_.FullName "bin"
                 if (Test-Path $binPath) {
                     $searchPaths += $binPath
-                    Write-Verbose "Encontrado em Program Files (x86): $binPath"
                 }
             }
         }
     }
     
-    # 4. pgAdmin 4 runtime
+    # pgAdmin
     $localAppData = $env:LOCALAPPDATA
     $pgAdminPaths = @(
         (Join-Path $localAppData "Programs\pgAdmin 4\runtime"),
@@ -204,25 +181,20 @@ function Find-PostgreSQLBinaries {
     foreach ($pgAdminPath in $pgAdminPaths) {
         if (Test-Path $pgAdminPath) {
             $searchPaths += $pgAdminPath
-            Write-Verbose "Encontrado pgAdmin: $pgAdminPath"
         }
     }
     
-    # 5. PATH environment variable
+    # PATH
     $pathEnv = $env:PATH -split ';'
     foreach ($path in $pathEnv) {
         if ($path -match 'postgres' -and (Test-Path $path)) {
             $searchPaths += $path
-            Write-Verbose "Encontrado no PATH: $path"
         }
     }
     
-    # Remover duplicatas
     $searchPaths = $searchPaths | Select-Object -Unique
     
-    Write-Verbose "Total de caminhos para verificar: $($searchPaths.Count)"
-    
-    # 6. Verificar binários necessários em cada caminho
+    # Verificar binários
     $requiredBinaries = @('pg_restore.exe', 'psql.exe', 'pg_dump.exe')
     
     foreach ($binPath in $searchPaths) {
@@ -246,7 +218,6 @@ function Find-PostgreSQLBinaries {
             $script:Config.psqlPath = $binaryPaths['psql.exe']
             $script:Config.pgDumpPath = $binaryPaths['pg_dump.exe']
             
-            # Obter versão do PostgreSQL
             try {
                 $versionOutput = & $script:Config.psqlPath --version 2>&1
                 Write-Log "✓ PostgreSQL encontrado: $binPath" -Level Success
@@ -260,9 +231,7 @@ function Find-PostgreSQLBinaries {
         }
     }
     
-    # Não encontrou
     Write-Log "✗ ERRO: Binários PostgreSQL não encontrados!" -Level Error
-    Write-Log "  Caminhos verificados: $($searchPaths.Count)" -Level Error
     
     [System.Windows.Forms.MessageBox]::Show(
         "PostgreSQL não encontrado!`r`n`r`n" +
@@ -283,10 +252,6 @@ function Find-PostgreSQLBinaries {
 
 #region Connection Functions
 function Test-PostgreSQLConnection {
-    <#
-    .SYNOPSIS
-        Testa conexão com servidor PostgreSQL
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -328,7 +293,6 @@ function Test-PostgreSQLConnection {
         $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
         
-        # Timeout de 10 segundos
         if (-not $process.WaitForExit(10000)) {
             $process.Kill()
             Write-Log "✗ Timeout ao conectar (10s)" -Level Error
@@ -362,10 +326,6 @@ function Test-PostgreSQLConnection {
 }
 
 function Get-DatabaseList {
-    <#
-    .SYNOPSIS
-        Lista todos os bancos de dados não-template
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -441,10 +401,6 @@ function Get-DatabaseList {
 
 #region Validation Functions
 function Test-ConnectionParameters {
-    <#
-    .SYNOPSIS
-        Valida parâmetros de conexão
-    #>
     [CmdletBinding()]
     param(
         [string]$HostName,
@@ -492,12 +448,320 @@ function Test-ConnectionParameters {
 }
 #endregion
 
-#region Backup Functions
-function Get-BackupType {
+#region Database Management Functions
+function Test-DatabaseExists {
     <#
     .SYNOPSIS
-        Detecta tipo de arquivo de backup (CUSTOM ou PLAIN)
+        Verifica se banco de dados existe
     #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$DatabaseName
+    )
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        $checkSql = "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName'"
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$checkSql`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $output = $process.StandardOutput.ReadToEnd().Trim()
+        $process.WaitForExit(5000) | Out-Null
+        
+        return ($output -eq "1")
+    }
+    catch {
+        Write-Log "✗ Erro ao verificar banco: $($_.Exception.Message)" -Level Error
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+
+function Remove-DatabaseIfExists {
+    <#
+    .SYNOPSIS
+        Remove banco de dados se existir
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$DatabaseName
+    )
+    
+    Write-Log "Removendo banco existente '$DatabaseName'..." -Level Warning
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        # Terminar conexões ativas
+        $killConnSql = @"
+SELECT pg_terminate_backend(pg_stat_activity.pid)
+FROM pg_stat_activity
+WHERE pg_stat_activity.datname = '$DatabaseName'
+  AND pid <> pg_backend_pid();
+"@
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"$killConnSql`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        $null = $process.Start()
+        $process.WaitForExit(5000) | Out-Null
+        
+        Write-Log "  Conexões ativas terminadas" -Level Info
+        
+        # Aguardar
+        Start-Sleep -Milliseconds 500
+        
+        # Drop database
+        $dropSql = "DROP DATABASE IF EXISTS `"$DatabaseName`""
+        
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"$dropSql`""
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $stderr = $process.StandardError.ReadToEnd()
+        
+        if (-not $process.WaitForExit(10000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao remover banco" -Level Error
+            return $false
+        }
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "✓ Banco removido com sucesso" -Level Success
+            Start-Sleep -Seconds 2  # CRÍTICO: Aguardar liberação completa
+            return $true
+        }
+        else {
+            Write-Log "✗ Erro ao remover banco: $stderr" -Level Error
+            return $false
+        }
+    }
+    catch {
+        Write-Log "✗ Exceção ao remover banco: $($_.Exception.Message)" -Level Error
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+
+function New-PostgreSQLDatabase {
+    <#
+    .SYNOPSIS
+        Cria banco de dados e GARANTE que está pronto para conexões
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$HostName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$DatabaseName
+    )
+    
+    Write-Log "Criando banco '$DatabaseName' com UTF8..." -Level Info
+    
+    try {
+        $env:PGPASSWORD = $Password
+        
+        # Criar com encoding UTF8 e template0
+        $createSql = "CREATE DATABASE `"$DatabaseName`" WITH ENCODING 'UTF8' TEMPLATE template0"
+        
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:Config.psqlPath
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"$createSql`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        
+        $null = $process.Start()
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        
+        if (-not $process.WaitForExit(15000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout ao criar banco (15s)" -Level Error
+            return $false
+        }
+        
+        if ($process.ExitCode -eq 0) {
+            Write-Log "✓ Banco criado!" -Level Success
+            
+            # CRÍTICO: Aguardar banco estar pronto
+            Write-Log "  Aguardando banco ficar pronto para conexões..." -Level Info
+            Start-Sleep -Seconds 3
+            
+            # Testar conexão 3 vezes para garantir
+            $maxAttempts = 3
+            $connected = $false
+            
+            for ($i = 1; $i -le $maxAttempts; $i++) {
+                Write-Log "  Tentativa $i/$maxAttempts - Testando conexão com '$DatabaseName'..." -Level Info
+                
+                $testPsi = New-Object System.Diagnostics.ProcessStartInfo
+                $testPsi.FileName = $script:Config.psqlPath
+                $testPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -c `"SELECT 1;`" -t"
+                $testPsi.UseShellExecute = $false
+                $testPsi.RedirectStandardOutput = $true
+                $testPsi.RedirectStandardError = $true
+                $testPsi.CreateNoWindow = $true
+                $testPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                
+                $testProcess = New-Object System.Diagnostics.Process
+                $testProcess.StartInfo = $testPsi
+                
+                $null = $testProcess.Start()
+                $testStdout = $testProcess.StandardOutput.ReadToEnd()
+                $testStderr = $testProcess.StandardError.ReadToEnd()
+                $testProcess.WaitForExit(5000) | Out-Null
+                
+                if ($testProcess.ExitCode -eq 0) {
+                    Write-Log "✓ Conexão com '$DatabaseName' OK!" -Level Success
+                    $connected = $true
+                    break
+                }
+                else {
+                    Write-Log "  Tentativa $i falhou: $testStderr" -Level Warning
+                    if ($i -lt $maxAttempts) {
+                        Start-Sleep -Seconds 2
+                    }
+                }
+            }
+            
+            if ($connected) {
+                Write-Log "✓ Banco '$DatabaseName' PRONTO PARA RESTORE!" -Level Success
+                return $true
+            }
+            else {
+                Write-Log "✗ Banco criado mas não aceita conexões após $maxAttempts tentativas" -Level Error
+                return $false
+            }
+        }
+        else {
+            # Exit code != 0
+            Write-Log "✗ Erro ao criar banco (Exit: $($process.ExitCode))" -Level Error
+            
+            if ($stderr) {
+                Write-Log "  Erro: $stderr" -Level Error
+            }
+            
+            # CORREÇÃO CRÍTICA: Verificar se erro é "already exists"
+            if ($stderr -match "already exists|j├í existe|já existe") {
+                Write-Log "✓ Banco '$DatabaseName' já existe - prosseguindo" -Level Success
+                
+                # Testar conexão mesmo assim
+                Start-Sleep -Seconds 1
+                
+                $testPsi = New-Object System.Diagnostics.ProcessStartInfo
+                $testPsi.FileName = $script:Config.psqlPath
+                $testPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -c `"SELECT 1;`" -t"
+                $testPsi.UseShellExecute = $false
+                $testPsi.RedirectStandardOutput = $true
+                $testPsi.RedirectStandardError = $true
+                $testPsi.CreateNoWindow = $true
+                $testPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                
+                $testProcess = New-Object System.Diagnostics.Process
+                $testProcess.StartInfo = $testPsi
+                
+                $null = $testProcess.Start()
+                $testProcess.WaitForExit(5000) | Out-Null
+                
+                if ($testProcess.ExitCode -eq 0) {
+                    Write-Log "✓ Banco existente está acessível!" -Level Success
+                    return $true
+                }
+                else {
+                    Write-Log "✗ Banco existe mas não está acessível" -Level Error
+                    return $false
+                }
+            }
+            
+            # Análise de outros erros
+            if ($stderr -match "permission denied|not authorized") {
+                Write-Log "  CAUSA: Usuário não tem permissão CREATEDB" -Level Error
+                Write-Log "  SOLUÇÃO: Execute como superuser ou: ALTER USER $User CREATEDB;" -Level Error
+            }
+            
+            return $false
+        }
+    }
+    catch {
+        Write-Log "✗ Exceção ao criar banco: $($_.Exception.Message)" -Level Error
+        return $false
+    }
+    finally {
+        $env:PGPASSWORD = $null
+    }
+}
+#endregion
+
+#region Backup Functions
+function Get-BackupType {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -525,10 +789,6 @@ function Get-BackupType {
 }
 
 function Get-DatabaseNameFromBackup {
-    <#
-    .SYNOPSIS
-        Tenta extrair nome do banco do arquivo de backup CUSTOM
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -579,199 +839,7 @@ function Get-DatabaseNameFromBackup {
     return ""
 }
 
-function New-PostgreSQLDatabase {
-    <#
-    .SYNOPSIS
-        Cria banco de dados se não existir
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$HostName,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Port,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$User,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Password,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$DatabaseName
-    )
-    
-    Write-Log "----------------------------------------" -Level Info
-    Write-Log "VERIFICANDO/CRIANDO BANCO DE DADOS" -Level Info
-    Write-Log "Nome: $DatabaseName" -Level Info
-    Write-Log "Host: $HostName`:$Port" -Level Info
-    Write-Log "----------------------------------------" -Level Info
-    
-    try {
-        $env:PGPASSWORD = $Password
-        
-        # Primeiro, testar conexão com postgres (banco padrão)
-        Write-Log "Testando conexão com servidor..." -Level Info
-        
-        $testPsi = New-Object System.Diagnostics.ProcessStartInfo
-        $testPsi.FileName = $script:Config.psqlPath
-        $testPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"SELECT 1;`" -t"
-        $testPsi.UseShellExecute = $false
-        $testPsi.RedirectStandardOutput = $true
-        $testPsi.RedirectStandardError = $true
-        $testPsi.CreateNoWindow = $true
-        $testPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        
-        $testProcess = New-Object System.Diagnostics.Process
-        $testProcess.StartInfo = $testPsi
-        
-        $null = $testProcess.Start()
-        $testStderr = $testProcess.StandardError.ReadToEnd()
-        
-        if (-not $testProcess.WaitForExit(10000)) {
-            $testProcess.Kill()
-            Write-Log "✗ Timeout ao conectar ao servidor" -Level Error
-            Write-Log "  Verifique se o PostgreSQL está rodando" -Level Error
-            return $false
-        }
-        
-        if ($testProcess.ExitCode -ne 0) {
-            Write-Log "✗ Falha ao conectar ao servidor" -Level Error
-            Write-Log "  Erro: $testStderr" -Level Error
-            Write-Log "  Verifique host, porta, usuário e senha" -Level Error
-            return $false
-        }
-        
-        Write-Log "✓ Conexão com servidor OK" -Level Success
-        
-        # Verificar se banco existe
-        Write-Log "Verificando se banco '$DatabaseName' existe..." -Level Info
-        
-        $checkSql = "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName'"
-        
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $script:Config.psqlPath
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$checkSql`""
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $psi
-        
-        $null = $process.Start()
-        $output = $process.StandardOutput.ReadToEnd().Trim()
-        $checkStderr = $process.StandardError.ReadToEnd()
-        
-        if (-not $process.WaitForExit(10000)) {
-            $process.Kill()
-            Write-Log "✗ Timeout ao verificar banco" -Level Error
-            return $false
-        }
-        
-        if ($process.ExitCode -ne 0) {
-            Write-Log "✗ Erro ao verificar banco: $checkStderr" -Level Error
-            return $false
-        }
-        
-        if ($output -eq "1") {
-            Write-Log "✓ Banco '$DatabaseName' já existe - prosseguindo" -Level Success
-            return $true
-        }
-        
-        # Criar banco
-        Write-Log "Banco não existe - criando '$DatabaseName'..." -Level Info
-        
-        $createSql = "CREATE DATABASE `"$DatabaseName`""
-        
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"$createSql`""
-        
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $psi
-        
-        $null = $process.Start()
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
-        
-        if (-not $process.WaitForExit(10000)) {
-            $process.Kill()
-            Write-Log "✗ Timeout ao criar banco" -Level Error
-            return $false
-        }
-        
-        if ($process.ExitCode -eq 0) {
-            Write-Log "✓ Banco '$DatabaseName' criado com sucesso!" -Level Success
-            
-            # Verificar novamente se foi criado
-            Start-Sleep -Milliseconds 500
-            
-            $verifyPsi = New-Object System.Diagnostics.ProcessStartInfo
-            $verifyPsi.FileName = $script:Config.psqlPath
-            $verifyPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$checkSql`""
-            $verifyPsi.UseShellExecute = $false
-            $verifyPsi.RedirectStandardOutput = $true
-            $verifyPsi.RedirectStandardError = $true
-            $verifyPsi.CreateNoWindow = $true
-            $verifyPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-            
-            $verifyProcess = New-Object System.Diagnostics.Process
-            $verifyProcess.StartInfo = $verifyPsi
-            
-            $null = $verifyProcess.Start()
-            $verifyOutput = $verifyProcess.StandardOutput.ReadToEnd().Trim()
-            $verifyProcess.WaitForExit()
-            
-            if ($verifyOutput -eq "1") {
-                Write-Log "✓ Verificação confirmada: banco existe no servidor" -Level Success
-                Write-Log "----------------------------------------" -Level Info
-                return $true
-            }
-            else {
-                Write-Log "✗ AVISO: Banco parece ter sido criado mas verificação falhou" -Level Warning
-                Write-Log "  Tentando prosseguir mesmo assim..." -Level Warning
-                Write-Log "----------------------------------------" -Level Info
-                return $true
-            }
-        }
-        else {
-            Write-Log "✗ Erro ao criar banco (Exit code: $($process.ExitCode))" -Level Error
-            Write-Log "  Saída de erro: $stderr" -Level Error
-            
-            # Analisar erro comum
-            if ($stderr -match "permission denied|not authorized") {
-                Write-Log "  CAUSA: Usuário não tem permissão para criar bancos" -Level Error
-                Write-Log "  SOLUÇÃO: Use um usuário com privilégios CREATEDB ou superuser" -Level Error
-            }
-            elseif ($stderr -match "already exists") {
-                Write-Log "  INFO: Banco já existe (conflito de timing)" -Level Warning
-                Write-Log "  Prosseguindo..." -Level Warning
-                Write-Log "----------------------------------------" -Level Info
-                return $true
-            }
-            
-            Write-Log "----------------------------------------" -Level Info
-            return $false
-        }
-    }
-    catch {
-        Write-Log "✗ Exceção ao criar banco: $($_.Exception.Message)" -Level Error
-        Write-Log "  Stack: $($_.ScriptStackTrace)" -Level Error
-        Write-Log "----------------------------------------" -Level Info
-        return $false
-    }
-    finally {
-        $env:PGPASSWORD = $null
-    }
-}
-
 function Start-DatabaseBackup {
-    <#
-    .SYNOPSIS
-        Executa backup de banco de dados SEM OWNER
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -799,11 +867,9 @@ function Start-DatabaseBackup {
     Write-Log "Host: $HostName`:$Port" -Level Info
     Write-Log "Banco: $Database" -Level Info
     Write-Log "Arquivo: $OutputPath" -Level Info
-    Write-Log "Flags: --no-owner --no-acl" -Level Info
     Write-Log "========================================" -Level Info
     
     try {
-        # Criar diretório se necessário
         $outputDir = Split-Path $OutputPath -Parent
         if (-not (Test-Path $outputDir)) {
             $null = New-Item -ItemType Directory -Path $outputDir -Force
@@ -814,7 +880,6 @@ function Start-DatabaseBackup {
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:Config.pgDumpPath
-        # ✅ CORREÇÃO: Adicionado --no-owner e --no-acl
         $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -F c -b -v --no-owner --no-acl -f `"$OutputPath`" `"$Database`""
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
@@ -823,14 +888,12 @@ function Start-DatabaseBackup {
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
         
         Write-Log "Executando pg_dump..." -Level Info
-        Write-Log "Comando: pg_dump -h $HostName -p $Port -U $User -F c -b -v --no-owner --no-acl -f `"$OutputPath`" `"$Database`"" -Level Info
         
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $psi
         
         $null = $process.Start()
         
-        # Ler saída em tempo real
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -849,7 +912,6 @@ function Start-DatabaseBackup {
                 $fileSize = $fileInfo.Length / 1MB
                 Write-Log "Arquivo: $($fileInfo.FullName)" -Level Success
                 Write-Log "Tamanho: $([math]::Round($fileSize, 2)) MB" -Level Success
-                Write-Log "Data: $($fileInfo.LastWriteTime)" -Level Success
                 Write-Log "Owner/ACL: Removidos (--no-owner --no-acl)" -Level Success
             }
             
@@ -898,11 +960,11 @@ function Start-DatabaseBackup {
 }
 #endregion
 
-#region Restore Functions
+#region Restore Functions - PROFISSIONAL
 function Start-DatabaseRestore {
     <#
     .SYNOPSIS
-        Executa restore de banco de dados
+        Restore PROFISSIONAL com confirmações e garantias
     #>
     [CmdletBinding()]
     param(
@@ -926,11 +988,11 @@ function Start-DatabaseRestore {
     )
     
     Write-Log "========================================" -Level Info
-    Write-Log "INICIANDO RESTORE" -Level Info
+    Write-Log "INICIANDO RESTORE PROFISSIONAL v3.0" -Level Info
     Write-Log "========================================" -Level Info
     Write-Log "Arquivo: $BackupFile" -Level Info
     
-    # Verificar tipo de backup
+    # Detectar tipo
     $backupType = Get-BackupType -FilePath $BackupFile
     Write-Log "Tipo de backup: $backupType" -Level Info
     
@@ -945,50 +1007,127 @@ function Start-DatabaseRestore {
         }
         
         if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
-            # Solicitar nome via InputBox
             $DatabaseName = Show-InputDialog -Title "Nome do Banco de Dados" `
                                             -Prompt "Informe o nome do banco de dados para restauração:" `
                                             -DefaultValue $detectedName
             
             if ([string]::IsNullOrWhiteSpace($DatabaseName)) {
-                Write-Log "Operação cancelada ou nome vazio" -Level Warning
+                Write-Log "Operação cancelada" -Level Warning
                 return $false
             }
         }
     }
     
     Write-Log "Banco de destino: $DatabaseName" -Level Info
-    Write-Log "Host de destino: $HostName`:$Port" -Level Info
+    Write-Log "Host: $HostName`:$Port" -Level Info
+    Write-Log "========================================" -Level Info
     
-    # Criar banco se necessário
-    Write-Log "Verificando/criando banco de dados..." -Level Info
-    $created = New-PostgreSQLDatabase -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
+    # PASSO 1: Verificar se banco existe
+    Write-Log "PASSO 1: Verificando se banco existe..." -Level Info
+    $dbExists = Test-DatabaseExists -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
     
-    if (-not $created) {
-        Write-Log "========================================" -Level Error
-        Write-Log "✗ RESTORE CANCELADO" -Level Error
-        Write-Log "✗ Não foi possível criar/acessar o banco de dados '$DatabaseName'" -Level Error
-        Write-Log "========================================" -Level Error
+    if ($dbExists) {
+        Write-Log "⚠ ATENÇÃO: Banco '$DatabaseName' JÁ EXISTE!" -Level Warning
         
-        [System.Windows.Forms.MessageBox]::Show(
-            "Não foi possível criar ou acessar o banco '$DatabaseName'`r`n`r`n" +
-            "Possíveis causas:`r`n" +
-            "• Usuário não tem permissão para criar bancos (precisa de CREATEDB ou superuser)`r`n" +
-            "• Falha na conexão com o servidor`r`n" +
-            "• Banco com nome conflitante`r`n`r`n" +
-            "Verifique o log para mais detalhes e tente:`r`n" +
-            "1. Usar um usuário com mais privilégios (ex: postgres)`r`n" +
-            "2. Criar o banco manualmente antes do restore`r`n" +
-            "3. Verificar se o PostgreSQL está acessível",
-            "Erro ao Criar Banco",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
+        # CONFIRMAÇÃO OBRIGATÓRIA
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "O banco '$DatabaseName' JÁ EXISTE no servidor!`r`n`r`n" +
+            "O que deseja fazer?`r`n`r`n" +
+            "• SIM = Remover e recriar (APAGA TODOS OS DADOS)`r`n" +
+            "• NÃO = Restaurar por cima (MESCLA com dados existentes)`r`n" +
+            "• CANCELAR = Cancelar operação`r`n`r`n" +
+            "⚠ ATENÇÃO: Esta ação não pode ser desfeita!",
+            "Banco Existente - Escolha uma Opção",
+            [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
         )
         
-        return $false
+        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+            # Usuário escolheu REMOVER e RECRIAR
+            Write-Log "Usuário escolheu: REMOVER E RECRIAR" -Level Warning
+            Write-Log "========================================" -Level Warning
+            
+            # CONFIRMAÇÃO DUPLA para segurança
+            $doubleCheck = [System.Windows.Forms.MessageBox]::Show(
+                "CONFIRMAÇÃO FINAL`r`n`r`n" +
+                "Você tem CERTEZA que deseja APAGAR o banco '$DatabaseName'?`r`n`r`n" +
+                "TODOS OS DADOS SERÃO PERDIDOS!`r`n`r`n" +
+                "Esta ação é IRREVERSÍVEL!",
+                "⚠ CONFIRMAÇÃO FINAL",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Exclamation
+            )
+            
+            if ($doubleCheck -ne [System.Windows.Forms.DialogResult]::Yes) {
+                Write-Log "Operação cancelada pelo usuário" -Level Info
+                return $false
+            }
+            
+            Write-Log "PASSO 2: Removendo banco existente..." -Level Warning
+            $removed = Remove-DatabaseIfExists -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
+            
+            if (-not $removed) {
+                Write-Log "✗ Falha ao remover banco existente" -Level Error
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Não foi possível remover o banco existente.`r`n`r`nVerifique o log para detalhes.",
+                    "Erro",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                return $false
+            }
+            
+            Write-Log "PASSO 3: Criando banco limpo..." -Level Info
+            $created = New-PostgreSQLDatabase -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
+            
+            if (-not $created) {
+                Write-Log "✗ Falha ao criar banco" -Level Error
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Não foi possível criar o banco.`r`n`r`nVerifique o log para detalhes.",
+                    "Erro",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                return $false
+            }
+        }
+        elseif ($result -eq [System.Windows.Forms.DialogResult]::No) {
+            # Usuário escolheu MESCLAR
+            Write-Log "Usuário escolheu: RESTAURAR POR CIMA (mesclar)" -Level Warning
+            Write-Log "PASSO 2: Pulando criação (banco existe)" -Level Info
+        }
+        else {
+            # Usuário CANCELOU
+            Write-Log "Operação cancelada pelo usuário" -Level Info
+            return $false
+        }
+    }
+    else {
+        # Banco não existe - criar novo
+        Write-Log "✓ Banco não existe - será criado" -Level Success
+        Write-Log "PASSO 2: Criando banco novo..." -Level Info
+        
+        $created = New-PostgreSQLDatabase -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
+        
+        if (-not $created) {
+            Write-Log "✗ Falha ao criar banco" -Level Error
+            [System.Windows.Forms.MessageBox]::Show(
+                "Não foi possível criar o banco.`r`n`r`n" +
+                "Possíveis causas:`r`n" +
+                "• Usuário não tem permissão CREATEDB`r`n" +
+                "• Servidor inacessível`r`n`r`n" +
+                "Verifique o log para detalhes.",
+                "Erro ao Criar Banco",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            )
+            return $false
+        }
     }
     
-    # Executar restore baseado no tipo
+    # PASSO 3: Executar restore
+    Write-Log "========================================" -Level Info
+    Write-Log "PASSO FINAL: Executando RESTORE..." -Level Info
     Write-Log "========================================" -Level Info
     
     if ($backupType -eq "CUSTOM") {
@@ -1000,10 +1139,6 @@ function Start-DatabaseRestore {
 }
 
 function Invoke-CustomRestore {
-    <#
-    .SYNOPSIS
-        Restaura backup no formato CUSTOM (.backup) COM TRATAMENTO COMPLETO DE ERROS
-    #>
     [CmdletBinding()]
     param(
         [string]$HostName,
@@ -1038,28 +1173,22 @@ function Invoke-CustomRestore {
         $null = $process.Start()
         $process.StandardInput.Close()
         
-        # ✅ CORREÇÃO: Capturar erros críticos vs avisos
+        # Capturar erros críticos vs avisos
         $errorLines = @()
         $warningLines = @()
-        $infoLines = @()
         
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                # Classificar por tipo
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    # Erros críticos
                     $errorLines += $line
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists") {
-                    # Avisos (não críticos)
                     $warningLines += $line
                     Write-Log $line -Level Warning
                 }
                 else {
-                    # Informação
-                    $infoLines += $line
                     Write-Log $line -Level Info
                 }
             }
@@ -1067,109 +1196,51 @@ function Invoke-CustomRestore {
         
         $process.WaitForExit()
         
-        # ✅ CORREÇÃO: Análise inteligente do exit code
         Write-Log "========================================" -Level Info
-        Write-Log "Código de saída pg_restore: $($process.ExitCode)" -Level Info
+        Write-Log "Código de saída: $($process.ExitCode)" -Level Info
         Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
         Write-Log "Avisos: $($warningLines.Count)" -Level Info
         Write-Log "========================================" -Level Info
         
-        # Determinar sucesso baseado em exit code E presença de erros críticos
         $isSuccess = $false
-        $resultMessage = ""
         
         if ($process.ExitCode -eq 0) {
-            # Sucesso total
             $isSuccess = $true
-            $resultMessage = "✓ Restore concluído com sucesso!"
-            Write-Log $resultMessage -Level Success
+            Write-Log "✓ Restore concluído com sucesso!" -Level Success
         }
         elseif ($process.ExitCode -eq 1 -and $errorLines.Count -eq 0) {
-            # Exit code 1 mas sem erros críticos = apenas avisos
             $isSuccess = $true
-            $resultMessage = "✓ Restore concluído com avisos (objetos já existentes)"
-            Write-Log $resultMessage -Level Success
-            Write-Log "  Os avisos são normais quando restaurando em banco existente" -Level Info
+            Write-Log "✓ Restore concluído com avisos (objetos já existentes)" -Level Success
         }
         else {
-            # Erro real
-            $isSuccess = $false
-            $resultMessage = "✗ Restore falhou com erros críticos"
-            Write-Log $resultMessage -Level Error
+            Write-Log "✗ Restore falhou" -Level Error
         }
         
-        # ✅ CORREÇÃO: Relatório detalhado de erros
         if ($errorLines.Count -gt 0) {
             Write-Log "========================================" -Level Error
-            Write-Log "ERROS CRÍTICOS ENCONTRADOS:" -Level Error
-            Write-Log "========================================" -Level Error
+            Write-Log "ERROS CRÍTICOS:" -Level Error
             foreach ($err in $errorLines) {
                 Write-Log "  $err" -Level Error
             }
             Write-Log "========================================" -Level Error
-            
-            # Análise de erros comuns
-            $errorAnalysis = @()
-            foreach ($err in $errorLines) {
-                if ($err -match "authentication failed") {
-                    $errorAnalysis += "• Senha incorreta ou usuário sem permissão"
-                }
-                elseif ($err -match "does not exist") {
-                    $errorAnalysis += "• Banco de dados ou objeto não existe"
-                }
-                elseif ($err -match "permission denied") {
-                    $errorAnalysis += "• Usuário não tem permissões necessárias"
-                }
-                elseif ($err -match "syntax error") {
-                    $errorAnalysis += "• Erro de sintaxe SQL (possível incompatibilidade de versão)"
-                }
-            }
-            
-            if ($errorAnalysis.Count -gt 0) {
-                Write-Log "POSSÍVEIS CAUSAS:" -Level Error
-                foreach ($analysis in $errorAnalysis) {
-                    Write-Log $analysis -Level Error
-                }
-            }
         }
         
-        # Mostrar resumo de avisos se houver
-        if ($warningLines.Count -gt 0 -and $warningLines.Count -le 10) {
-            Write-Log "========================================" -Level Warning
-            Write-Log "AVISOS (não críticos):" -Level Warning
-            foreach ($warn in $warningLines) {
-                Write-Log "  $warn" -Level Warning
-            }
-            Write-Log "========================================" -Level Warning
-        }
-        elseif ($warningLines.Count -gt 10) {
-            Write-Log "========================================" -Level Warning
-            Write-Log "Total de avisos: $($warningLines.Count) (muitos objetos já existiam)" -Level Warning
-            Write-Log "========================================" -Level Warning
-        }
+        Write-Log "========================================" -Level Success
         
-        Write-Log "========================================" -Level Info
-        
-        # Mensagem final ao usuário
         if ($isSuccess) {
-            $msgText = "$resultMessage`r`n`r`nBanco: $DatabaseName`r`n"
-            if ($warningLines.Count -gt 0) {
-                $msgText += "`r`nAvisos: $($warningLines.Count) (normal para bancos existentes)"
-            }
-            
             [System.Windows.Forms.MessageBox]::Show(
-                $msgText,
+                "Restore concluído com sucesso!`r`n`r`n" +
+                "Banco: $DatabaseName`r`n" +
+                "Avisos: $($warningLines.Count) (normal)",
                 "Restore Concluído",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
         }
         else {
-            $msgText = "$resultMessage`r`n`r`nErros encontrados: $($errorLines.Count)`r`n`r`nVerifique o log para detalhes completos."
-            
             [System.Windows.Forms.MessageBox]::Show(
-                $msgText,
-                "Restore com Erros",
+                "Restore falhou!`r`n`r`nErros: $($errorLines.Count)`r`n`r`nVerifique o log.",
+                "Erro no Restore",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
@@ -1178,7 +1249,7 @@ function Invoke-CustomRestore {
         return $isSuccess
     }
     catch {
-        Write-Log "✗ Erro no restore CUSTOM: $($_.Exception.Message)" -Level Error
+        Write-Log "✗ Erro no restore: $($_.Exception.Message)" -Level Error
         [System.Windows.Forms.MessageBox]::Show(
             "Erro: $($_.Exception.Message)",
             "Erro",
@@ -1193,10 +1264,6 @@ function Invoke-CustomRestore {
 }
 
 function Invoke-PlainRestore {
-    <#
-    .SYNOPSIS
-        Restaura backup no formato PLAIN (.sql) COM TRATAMENTO COMPLETO DE ERROS
-    #>
     [CmdletBinding()]
     param(
         [string]$HostName,
@@ -1231,28 +1298,21 @@ function Invoke-PlainRestore {
         $null = $process.Start()
         $process.StandardInput.Close()
         
-        # ✅ CORREÇÃO: Capturar erros críticos vs avisos (mesmo para PLAIN)
         $errorLines = @()
         $warningLines = @()
-        $infoLines = @()
         
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                # Classificar por tipo
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    # Erros críticos
                     $errorLines += $line
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists|NOTICE") {
-                    # Avisos (não críticos)
                     $warningLines += $line
                     Write-Log $line -Level Warning
                 }
                 else {
-                    # Informação
-                    $infoLines += $line
                     Write-Log $line -Level Info
                 }
             }
@@ -1260,98 +1320,22 @@ function Invoke-PlainRestore {
         
         $process.WaitForExit()
         
-        # ✅ CORREÇÃO: Análise inteligente do exit code
-        Write-Log "========================================" -Level Info
-        Write-Log "Código de saída psql: $($process.ExitCode)" -Level Info
-        Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
-        Write-Log "Avisos: $($warningLines.Count)" -Level Info
-        Write-Log "========================================" -Level Info
+        $isSuccess = ($process.ExitCode -eq 0) -or (($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) -and $errorLines.Count -eq 0)
         
-        # Determinar sucesso
-        $isSuccess = $false
-        $resultMessage = ""
-        
-        if ($process.ExitCode -eq 0) {
-            $isSuccess = $true
-            $resultMessage = "✓ Restore concluído com sucesso!"
-            Write-Log $resultMessage -Level Success
-        }
-        elseif ($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) {
-            # Para psql, exit codes 1-2 podem ser avisos
-            if ($errorLines.Count -eq 0) {
-                $isSuccess = $true
-                $resultMessage = "✓ Restore concluído com avisos"
-                Write-Log $resultMessage -Level Success
-            }
-            else {
-                $isSuccess = $false
-                $resultMessage = "✗ Restore falhou com erros críticos"
-                Write-Log $resultMessage -Level Error
-            }
-        }
-        else {
-            $isSuccess = $false
-            $resultMessage = "✗ Restore falhou (código $($process.ExitCode))"
-            Write-Log $resultMessage -Level Error
-        }
-        
-        # ✅ CORREÇÃO: Relatório detalhado de erros (igual ao CUSTOM)
-        if ($errorLines.Count -gt 0) {
-            Write-Log "========================================" -Level Error
-            Write-Log "ERROS CRÍTICOS ENCONTRADOS:" -Level Error
-            Write-Log "========================================" -Level Error
-            foreach ($err in $errorLines) {
-                Write-Log "  $err" -Level Error
-            }
-            Write-Log "========================================" -Level Error
-            
-            # Análise de erros comuns
-            $errorAnalysis = @()
-            foreach ($err in $errorLines) {
-                if ($err -match "authentication failed") {
-                    $errorAnalysis += "• Senha incorreta ou usuário sem permissão"
-                }
-                elseif ($err -match "does not exist") {
-                    $errorAnalysis += "• Banco de dados ou objeto não existe"
-                }
-                elseif ($err -match "permission denied") {
-                    $errorAnalysis += "• Usuário não tem permissões necessárias"
-                }
-                elseif ($err -match "syntax error") {
-                    $errorAnalysis += "• Erro de sintaxe SQL (possível incompatibilidade de versão)"
-                }
-            }
-            
-            if ($errorAnalysis.Count -gt 0) {
-                Write-Log "POSSÍVEIS CAUSAS:" -Level Error
-                foreach ($analysis in $errorAnalysis) {
-                    Write-Log $analysis -Level Error
-                }
-            }
-        }
-        
-        Write-Log "========================================" -Level Info
-        
-        # Mensagem final ao usuário
         if ($isSuccess) {
-            $msgText = "$resultMessage`r`n`r`nBanco: $DatabaseName`r`n"
-            if ($warningLines.Count -gt 0) {
-                $msgText += "`r`nAvisos: $($warningLines.Count)"
-            }
-            
+            Write-Log "✓ Restore concluído!" -Level Success
             [System.Windows.Forms.MessageBox]::Show(
-                $msgText,
+                "Restore concluído com sucesso!`r`n`r`nBanco: $DatabaseName",
                 "Restore Concluído",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
         }
         else {
-            $msgText = "$resultMessage`r`n`r`nErros encontrados: $($errorLines.Count)`r`n`r`nVerifique o log para detalhes completos."
-            
+            Write-Log "✗ Restore falhou" -Level Error
             [System.Windows.Forms.MessageBox]::Show(
-                $msgText,
-                "Restore com Erros",
+                "Restore falhou!`r`n`r`nErros: $($errorLines.Count)`r`n`r`nVerifique o log.",
+                "Erro",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Error
             )
@@ -1360,7 +1344,7 @@ function Invoke-PlainRestore {
         return $isSuccess
     }
     catch {
-        Write-Log "✗ Erro no restore SQL: $($_.Exception.Message)" -Level Error
+        Write-Log "✗ Erro no restore: $($_.Exception.Message)" -Level Error
         [System.Windows.Forms.MessageBox]::Show(
             "Erro: $($_.Exception.Message)",
             "Erro",
@@ -1377,10 +1361,6 @@ function Invoke-PlainRestore {
 
 #region UI Helper Functions
 function Show-InputDialog {
-    <#
-    .SYNOPSIS
-        Mostra diálogo de input customizado
-    #>
     [CmdletBinding()]
     param(
         [string]$Title = "Input",
@@ -1439,20 +1419,13 @@ function Show-InputDialog {
 }
 
 function Enable-Controls {
-    <#
-    .SYNOPSIS
-        Habilita/desabilita controles durante operações
-    #>
     [CmdletBinding()]
     param(
         [bool]$Enabled = $true
     )
     
-    # Backup Tab
     if ($script:UI.btnConnectBkp) { $script:UI.btnConnectBkp.Enabled = $Enabled }
     if ($script:UI.btnBackup) { $script:UI.btnBackup.Enabled = $Enabled }
-    
-    # Restore Tab
     if ($script:UI.btnTestConnection) { $script:UI.btnTestConnection.Enabled = $Enabled }
     if ($script:UI.btnRestore) { $script:UI.btnRestore.Enabled = $Enabled }
     
@@ -1470,14 +1443,9 @@ function Enable-Controls {
 
 #region UI Creation
 function Initialize-MainForm {
-    <#
-    .SYNOPSIS
-        Cria e configura o formulário principal
-    #>
     [CmdletBinding()]
     param()
     
-    # Criar formulário principal
     $script:UI.Form = New-Object System.Windows.Forms.Form
     $script:UI.Form.Text = "$($script:Config.FormTitle) v$($script:Config.Version)"
     $script:UI.Form.Size = New-Object System.Drawing.Size(700, 600)
@@ -1486,7 +1454,7 @@ function Initialize-MainForm {
     $script:UI.Form.MaximizeBox = $false
     $script:UI.Form.Icon = [System.Drawing.SystemIcons]::Application
     
-    # Panel superior com informações
+    # Panel superior
     $panelInfo = New-Object System.Windows.Forms.Panel
     $panelInfo.Location = New-Object System.Drawing.Point(10, 10)
     $panelInfo.Size = New-Object System.Drawing.Size(665, 75)
@@ -1502,14 +1470,13 @@ function Initialize-MainForm {
     
     $lblVersion = New-Object System.Windows.Forms.Label
     $lblVersion.Name = "lblVersion"
-    $lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: Verificando..."
+    $lblVersion.Text = "Versão $($script:Config.Version) PROFISSIONAL | PostgreSQL: Verificando..."
     $lblVersion.Font = New-Object System.Drawing.Font("Segoe UI", 9)
     $lblVersion.ForeColor = [System.Drawing.Color]::Gray
     $lblVersion.Location = New-Object System.Drawing.Point(10, 40)
     $lblVersion.Size = New-Object System.Drawing.Size(645, 20)
     $panelInfo.Controls.Add($lblVersion)
     
-    # Guardar referência do label
     $script:UI.lblVersion = $lblVersion
     
     # TabControl
@@ -1518,11 +1485,10 @@ function Initialize-MainForm {
     $tabControl.Size = New-Object System.Drawing.Size(665, 260)
     $script:UI.Form.Controls.Add($tabControl)
     
-    # Criar abas
     Initialize-BackupTab -TabControl $tabControl
     Initialize-RestoreTab -TabControl $tabControl
     
-    # RichTextBox Log
+    # Log
     $lblLog = New-Object System.Windows.Forms.Label
     $lblLog.Text = "Log de Operações:"
     $lblLog.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
@@ -1547,27 +1513,25 @@ function Initialize-MainForm {
     $script:UI.rtbLog.BorderStyle = "FixedSingle"
     $script:UI.Form.Controls.Add($script:UI.rtbLog)
     
-    # Event handlers
+    # Events
     $script:UI.Form.Add_Load({
         Write-Log "========================================" -Level Info
         Write-Log "PostgreSQL Backup & Restore Pro v$($script:Config.Version)" -Level Info
-        Write-Log "✅ MELHORIAS: Backup sem owner/ACL + Restore com análise de erros" -Level Info
+        Write-Log "VERSÃO PROFISSIONAL - Restore Robusto com Confirmações" -Level Info
         Write-Log "========================================" -Level Info
         Write-Log "Iniciando aplicação..." -Level Info
         
         if (Find-PostgreSQLBinaries) {
             Write-Log "Aplicação pronta para uso!" -Level Success
-            # Atualizar label de versão
             if ($script:UI.lblVersion) {
-                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: ✓ Encontrado"
+                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) PROFISSIONAL | PostgreSQL: ✓ Encontrado"
                 $script:UI.lblVersion.ForeColor = [System.Drawing.Color]::Green
             }
         }
         else {
             Write-Log "ATENÇÃO: Configure o PostgreSQL para continuar" -Level Warning
-            # Atualizar label de versão
             if ($script:UI.lblVersion) {
-                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) | PostgreSQL: ✗ Não encontrado"
+                $script:UI.lblVersion.Text = "Versão $($script:Config.Version) PROFISSIONAL | PostgreSQL: ✗ Não encontrado"
                 $script:UI.lblVersion.ForeColor = [System.Drawing.Color]::Red
             }
         }
@@ -1592,10 +1556,6 @@ function Initialize-MainForm {
 }
 
 function Initialize-BackupTab {
-    <#
-    .SYNOPSIS
-        Cria aba de Backup
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -1726,7 +1686,7 @@ function Initialize-BackupTab {
     })
     $grpConnection.Controls.Add($script:UI.btnConnectBkp)
     
-    # GroupBox Banco de Dados
+    # GroupBox Banco
     $grpDatabase = New-Object System.Windows.Forms.GroupBox
     $grpDatabase.Text = "Selecionar Banco de Dados"
     $grpDatabase.Location = New-Object System.Drawing.Point(10, 110)
@@ -1767,7 +1727,6 @@ function Initialize-BackupTab {
             return
         }
         
-        # Diálogo para salvar arquivo
         $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
         $saveDialog.Title = "Salvar backup como"
         $saveDialog.Filter = "Backup PostgreSQL (*.backup)|*.backup|Arquivo SQL (*.sql)|*.sql|Todos os arquivos (*.*)|*.*"
@@ -1795,10 +1754,6 @@ function Initialize-BackupTab {
 }
 
 function Initialize-RestoreTab {
-    <#
-    .SYNOPSIS
-        Cria aba de Restore
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -1944,7 +1899,6 @@ function Initialize-RestoreTab {
             $script:UI.txtFileRestore.Text = $openDialog.FileName
             Write-Log "Arquivo selecionado: $(Split-Path $openDialog.FileName -Leaf)" -Level Info
             
-            # Detectar tipo
             $type = Get-BackupType -FilePath $openDialog.FileName
             Write-Log "Tipo detectado: $type" -Level Info
         }
@@ -1990,30 +1944,17 @@ function Initialize-RestoreTab {
             return
         }
         
-        # Confirmar operação
-        $result = [System.Windows.Forms.MessageBox]::Show(
-            "ATENÇÃO: Esta operação irá restaurar o backup no servidor.`r`n`r`n" +
-            "Servidor: $hostname`:$port`r`n" +
-            "Arquivo: $(Split-Path $script:UI.txtFileRestore.Text -Leaf)`r`n`r`n" +
-            "Deseja continuar?",
-            "Confirmar Restore",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
+        Enable-Controls -Enabled $false
         
-        if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Enable-Controls -Enabled $false
-            
-            try {
-                Start-DatabaseRestore -HostName $hostname `
-                                     -Port $port `
-                                     -User $user `
-                                     -Password $pass `
-                                     -BackupFile $script:UI.txtFileRestore.Text
-            }
-            finally {
-                Enable-Controls -Enabled $true
-            }
+        try {
+            Start-DatabaseRestore -HostName $hostname `
+                                 -Port $port `
+                                 -User $user `
+                                 -Password $pass `
+                                 -BackupFile $script:UI.txtFileRestore.Text
+        }
+        finally {
+            Enable-Controls -Enabled $true
         }
     })
     $tabRestore.Controls.Add($script:UI.btnRestore)
@@ -2044,7 +1985,6 @@ catch {
     exit 1
 }
 finally {
-    # Cleanup
     if ($script:UI.Form) {
         $script:UI.Form.Dispose()
     }
