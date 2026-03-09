@@ -19,7 +19,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "2.1"  # Versão atualizada com correções
+    Version = "2.2"  # Versão atualizada com melhorias na criação de banco
 }
 
 $script:PredefinedHosts = @{
@@ -602,10 +602,52 @@ function New-PostgreSQLDatabase {
         [string]$DatabaseName
     )
     
+    Write-Log "----------------------------------------" -Level Info
+    Write-Log "VERIFICANDO/CRIANDO BANCO DE DADOS" -Level Info
+    Write-Log "Nome: $DatabaseName" -Level Info
+    Write-Log "Host: $HostName`:$Port" -Level Info
+    Write-Log "----------------------------------------" -Level Info
+    
     try {
         $env:PGPASSWORD = $Password
         
-        # Verificar se existe
+        # Primeiro, testar conexão com postgres (banco padrão)
+        Write-Log "Testando conexão com servidor..." -Level Info
+        
+        $testPsi = New-Object System.Diagnostics.ProcessStartInfo
+        $testPsi.FileName = $script:Config.psqlPath
+        $testPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -c `"SELECT 1;`" -t"
+        $testPsi.UseShellExecute = $false
+        $testPsi.RedirectStandardOutput = $true
+        $testPsi.RedirectStandardError = $true
+        $testPsi.CreateNoWindow = $true
+        $testPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+        
+        $testProcess = New-Object System.Diagnostics.Process
+        $testProcess.StartInfo = $testPsi
+        
+        $null = $testProcess.Start()
+        $testStderr = $testProcess.StandardError.ReadToEnd()
+        
+        if (-not $testProcess.WaitForExit(10000)) {
+            $testProcess.Kill()
+            Write-Log "✗ Timeout ao conectar ao servidor" -Level Error
+            Write-Log "  Verifique se o PostgreSQL está rodando" -Level Error
+            return $false
+        }
+        
+        if ($testProcess.ExitCode -ne 0) {
+            Write-Log "✗ Falha ao conectar ao servidor" -Level Error
+            Write-Log "  Erro: $testStderr" -Level Error
+            Write-Log "  Verifique host, porta, usuário e senha" -Level Error
+            return $false
+        }
+        
+        Write-Log "✓ Conexão com servidor OK" -Level Success
+        
+        # Verificar se banco existe
+        Write-Log "Verificando se banco '$DatabaseName' existe..." -Level Info
+        
         $checkSql = "SELECT 1 FROM pg_database WHERE datname = '$DatabaseName'"
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -622,6 +664,7 @@ function New-PostgreSQLDatabase {
         
         $null = $process.Start()
         $output = $process.StandardOutput.ReadToEnd().Trim()
+        $checkStderr = $process.StandardError.ReadToEnd()
         
         if (-not $process.WaitForExit(10000)) {
             $process.Kill()
@@ -629,13 +672,18 @@ function New-PostgreSQLDatabase {
             return $false
         }
         
+        if ($process.ExitCode -ne 0) {
+            Write-Log "✗ Erro ao verificar banco: $checkStderr" -Level Error
+            return $false
+        }
+        
         if ($output -eq "1") {
-            Write-Log "✓ Banco '$DatabaseName' já existe" -Level Info
+            Write-Log "✓ Banco '$DatabaseName' já existe - prosseguindo" -Level Success
             return $true
         }
         
         # Criar banco
-        Write-Log "Criando banco '$DatabaseName'..." -Level Info
+        Write-Log "Banco não existe - criando '$DatabaseName'..." -Level Info
         
         $createSql = "CREATE DATABASE `"$DatabaseName`""
         
@@ -645,6 +693,7 @@ function New-PostgreSQLDatabase {
         $process.StartInfo = $psi
         
         $null = $process.Start()
+        $stdout = $process.StandardOutput.ReadToEnd()
         $stderr = $process.StandardError.ReadToEnd()
         
         if (-not $process.WaitForExit(10000)) {
@@ -654,16 +703,63 @@ function New-PostgreSQLDatabase {
         }
         
         if ($process.ExitCode -eq 0) {
-            Write-Log "✓ Banco criado com sucesso" -Level Success
-            return $true
+            Write-Log "✓ Banco '$DatabaseName' criado com sucesso!" -Level Success
+            
+            # Verificar novamente se foi criado
+            Start-Sleep -Milliseconds 500
+            
+            $verifyPsi = New-Object System.Diagnostics.ProcessStartInfo
+            $verifyPsi.FileName = $script:Config.psqlPath
+            $verifyPsi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d postgres -t -A -c `"$checkSql`""
+            $verifyPsi.UseShellExecute = $false
+            $verifyPsi.RedirectStandardOutput = $true
+            $verifyPsi.RedirectStandardError = $true
+            $verifyPsi.CreateNoWindow = $true
+            $verifyPsi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            
+            $verifyProcess = New-Object System.Diagnostics.Process
+            $verifyProcess.StartInfo = $verifyPsi
+            
+            $null = $verifyProcess.Start()
+            $verifyOutput = $verifyProcess.StandardOutput.ReadToEnd().Trim()
+            $verifyProcess.WaitForExit()
+            
+            if ($verifyOutput -eq "1") {
+                Write-Log "✓ Verificação confirmada: banco existe no servidor" -Level Success
+                Write-Log "----------------------------------------" -Level Info
+                return $true
+            }
+            else {
+                Write-Log "✗ AVISO: Banco parece ter sido criado mas verificação falhou" -Level Warning
+                Write-Log "  Tentando prosseguir mesmo assim..." -Level Warning
+                Write-Log "----------------------------------------" -Level Info
+                return $true
+            }
         }
         else {
-            Write-Log "✗ Erro ao criar banco: $stderr" -Level Error
+            Write-Log "✗ Erro ao criar banco (Exit code: $($process.ExitCode))" -Level Error
+            Write-Log "  Saída de erro: $stderr" -Level Error
+            
+            # Analisar erro comum
+            if ($stderr -match "permission denied|not authorized") {
+                Write-Log "  CAUSA: Usuário não tem permissão para criar bancos" -Level Error
+                Write-Log "  SOLUÇÃO: Use um usuário com privilégios CREATEDB ou superuser" -Level Error
+            }
+            elseif ($stderr -match "already exists") {
+                Write-Log "  INFO: Banco já existe (conflito de timing)" -Level Warning
+                Write-Log "  Prosseguindo..." -Level Warning
+                Write-Log "----------------------------------------" -Level Info
+                return $true
+            }
+            
+            Write-Log "----------------------------------------" -Level Info
             return $false
         }
     }
     catch {
-        Write-Log "✗ Erro ao criar banco: $($_.Exception.Message)" -Level Error
+        Write-Log "✗ Exceção ao criar banco: $($_.Exception.Message)" -Level Error
+        Write-Log "  Stack: $($_.ScriptStackTrace)" -Level Error
+        Write-Log "----------------------------------------" -Level Info
         return $false
     }
     finally {
@@ -869,7 +965,26 @@ function Start-DatabaseRestore {
     $created = New-PostgreSQLDatabase -HostName $HostName -Port $Port -User $User -Password $Password -DatabaseName $DatabaseName
     
     if (-not $created) {
-        Write-Log "✗ Não foi possível criar/acessar o banco de dados" -Level Error
+        Write-Log "========================================" -Level Error
+        Write-Log "✗ RESTORE CANCELADO" -Level Error
+        Write-Log "✗ Não foi possível criar/acessar o banco de dados '$DatabaseName'" -Level Error
+        Write-Log "========================================" -Level Error
+        
+        [System.Windows.Forms.MessageBox]::Show(
+            "Não foi possível criar ou acessar o banco '$DatabaseName'`r`n`r`n" +
+            "Possíveis causas:`r`n" +
+            "• Usuário não tem permissão para criar bancos (precisa de CREATEDB ou superuser)`r`n" +
+            "• Falha na conexão com o servidor`r`n" +
+            "• Banco com nome conflitante`r`n`r`n" +
+            "Verifique o log para mais detalhes e tente:`r`n" +
+            "1. Usar um usuário com mais privilégios (ex: postgres)`r`n" +
+            "2. Criar o banco manualmente antes do restore`r`n" +
+            "3. Verificar se o PostgreSQL está acessível",
+            "Erro ao Criar Banco",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
+        
         return $false
     }
     
