@@ -19,7 +19,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "2.0"
+    Version = "2.1"  # Versão atualizada com correções
 }
 
 $script:PredefinedHosts = @{
@@ -674,7 +674,7 @@ function New-PostgreSQLDatabase {
 function Start-DatabaseBackup {
     <#
     .SYNOPSIS
-        Executa backup de banco de dados
+        Executa backup de banco de dados SEM OWNER
     #>
     [CmdletBinding()]
     param(
@@ -698,11 +698,12 @@ function Start-DatabaseBackup {
     )
     
     Write-Log "========================================" -Level Info
-    Write-Log "INICIANDO BACKUP" -Level Info
+    Write-Log "INICIANDO BACKUP (SEM OWNER/ACL)" -Level Info
     Write-Log "========================================" -Level Info
     Write-Log "Host: $HostName`:$Port" -Level Info
     Write-Log "Banco: $Database" -Level Info
     Write-Log "Arquivo: $OutputPath" -Level Info
+    Write-Log "Flags: --no-owner --no-acl" -Level Info
     Write-Log "========================================" -Level Info
     
     try {
@@ -717,7 +718,8 @@ function Start-DatabaseBackup {
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:Config.pgDumpPath
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -F c -b -v -f `"$OutputPath`" `"$Database`""
+        # ✅ CORREÇÃO: Adicionado --no-owner e --no-acl
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -F c -b -v --no-owner --no-acl -f `"$OutputPath`" `"$Database`""
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -725,7 +727,7 @@ function Start-DatabaseBackup {
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
         
         Write-Log "Executando pg_dump..." -Level Info
-        Write-Log "Comando: pg_dump -h $HostName -p $Port -U $User -F c -b -v -f `"$OutputPath`" `"$Database`"" -Level Info
+        Write-Log "Comando: pg_dump -h $HostName -p $Port -U $User -F c -b -v --no-owner --no-acl -f `"$OutputPath`" `"$Database`"" -Level Info
         
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $psi
@@ -752,6 +754,7 @@ function Start-DatabaseBackup {
                 Write-Log "Arquivo: $($fileInfo.FullName)" -Level Success
                 Write-Log "Tamanho: $([math]::Round($fileSize, 2)) MB" -Level Success
                 Write-Log "Data: $($fileInfo.LastWriteTime)" -Level Success
+                Write-Log "Owner/ACL: Removidos (--no-owner --no-acl)" -Level Success
             }
             
             Write-Log "========================================" -Level Success
@@ -759,7 +762,8 @@ function Start-DatabaseBackup {
             [System.Windows.Forms.MessageBox]::Show(
                 "Backup concluído com sucesso!`r`n`r`n" +
                 "Arquivo: $OutputPath`r`n" +
-                "Tamanho: $([math]::Round($fileSize, 2)) MB",
+                "Tamanho: $([math]::Round($fileSize, 2)) MB`r`n`r`n" +
+                "✓ Backup criado SEM informações de owner/ACL",
                 "Backup Concluído",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
@@ -883,7 +887,7 @@ function Start-DatabaseRestore {
 function Invoke-CustomRestore {
     <#
     .SYNOPSIS
-        Restaura backup no formato CUSTOM (.backup)
+        Restaura backup no formato CUSTOM (.backup) COM TRATAMENTO COMPLETO DE ERROS
     #>
     [CmdletBinding()]
     param(
@@ -896,7 +900,7 @@ function Invoke-CustomRestore {
     )
     
     Write-Log "Tipo: CUSTOM (.backup)" -Level Info
-    Write-Log "Executando pg_restore..." -Level Info
+    Write-Log "Executando pg_restore com --no-owner --no-acl..." -Level Info
     
     try {
         $env:PGPASSWORD = $Password
@@ -919,13 +923,28 @@ function Invoke-CustomRestore {
         $null = $process.Start()
         $process.StandardInput.Close()
         
-        # Ler saída em tempo real
+        # ✅ CORREÇÃO: Capturar erros críticos vs avisos
+        $errorLines = @()
+        $warningLines = @()
+        $infoLines = @()
+        
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                # Filtrar avisos comuns que não são erros críticos
-                if ($line -notmatch "WARNING.*already exists" -and 
-                    $line -notmatch "ERROR.*already exists") {
+                # Classificar por tipo
+                if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
+                    # Erros críticos
+                    $errorLines += $line
+                    Write-Log $line -Level Error
+                }
+                elseif ($line -match "WARNING|ERROR.*already exists") {
+                    # Avisos (não críticos)
+                    $warningLines += $line
+                    Write-Log $line -Level Warning
+                }
+                else {
+                    # Informação
+                    $infoLines += $line
                     Write-Log $line -Level Info
                 }
             }
@@ -933,33 +952,115 @@ function Invoke-CustomRestore {
         
         $process.WaitForExit()
         
-        # Exit codes: 0 = success, 1 = warnings (acceptable)
-        if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 1) {
-            Write-Log "========================================" -Level Success
-            Write-Log "✓ Restore concluído!" -Level Success
-            Write-Log "========================================" -Level Success
+        # ✅ CORREÇÃO: Análise inteligente do exit code
+        Write-Log "========================================" -Level Info
+        Write-Log "Código de saída pg_restore: $($process.ExitCode)" -Level Info
+        Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
+        Write-Log "Avisos: $($warningLines.Count)" -Level Info
+        Write-Log "========================================" -Level Info
+        
+        # Determinar sucesso baseado em exit code E presença de erros críticos
+        $isSuccess = $false
+        $resultMessage = ""
+        
+        if ($process.ExitCode -eq 0) {
+            # Sucesso total
+            $isSuccess = $true
+            $resultMessage = "✓ Restore concluído com sucesso!"
+            Write-Log $resultMessage -Level Success
+        }
+        elseif ($process.ExitCode -eq 1 -and $errorLines.Count -eq 0) {
+            # Exit code 1 mas sem erros críticos = apenas avisos
+            $isSuccess = $true
+            $resultMessage = "✓ Restore concluído com avisos (objetos já existentes)"
+            Write-Log $resultMessage -Level Success
+            Write-Log "  Os avisos são normais quando restaurando em banco existente" -Level Info
+        }
+        else {
+            # Erro real
+            $isSuccess = $false
+            $resultMessage = "✗ Restore falhou com erros críticos"
+            Write-Log $resultMessage -Level Error
+        }
+        
+        # ✅ CORREÇÃO: Relatório detalhado de erros
+        if ($errorLines.Count -gt 0) {
+            Write-Log "========================================" -Level Error
+            Write-Log "ERROS CRÍTICOS ENCONTRADOS:" -Level Error
+            Write-Log "========================================" -Level Error
+            foreach ($err in $errorLines) {
+                Write-Log "  $err" -Level Error
+            }
+            Write-Log "========================================" -Level Error
+            
+            # Análise de erros comuns
+            $errorAnalysis = @()
+            foreach ($err in $errorLines) {
+                if ($err -match "authentication failed") {
+                    $errorAnalysis += "• Senha incorreta ou usuário sem permissão"
+                }
+                elseif ($err -match "does not exist") {
+                    $errorAnalysis += "• Banco de dados ou objeto não existe"
+                }
+                elseif ($err -match "permission denied") {
+                    $errorAnalysis += "• Usuário não tem permissões necessárias"
+                }
+                elseif ($err -match "syntax error") {
+                    $errorAnalysis += "• Erro de sintaxe SQL (possível incompatibilidade de versão)"
+                }
+            }
+            
+            if ($errorAnalysis.Count -gt 0) {
+                Write-Log "POSSÍVEIS CAUSAS:" -Level Error
+                foreach ($analysis in $errorAnalysis) {
+                    Write-Log $analysis -Level Error
+                }
+            }
+        }
+        
+        # Mostrar resumo de avisos se houver
+        if ($warningLines.Count -gt 0 -and $warningLines.Count -le 10) {
+            Write-Log "========================================" -Level Warning
+            Write-Log "AVISOS (não críticos):" -Level Warning
+            foreach ($warn in $warningLines) {
+                Write-Log "  $warn" -Level Warning
+            }
+            Write-Log "========================================" -Level Warning
+        }
+        elseif ($warningLines.Count -gt 10) {
+            Write-Log "========================================" -Level Warning
+            Write-Log "Total de avisos: $($warningLines.Count) (muitos objetos já existiam)" -Level Warning
+            Write-Log "========================================" -Level Warning
+        }
+        
+        Write-Log "========================================" -Level Info
+        
+        # Mensagem final ao usuário
+        if ($isSuccess) {
+            $msgText = "$resultMessage`r`n`r`nBanco: $DatabaseName`r`n"
+            if ($warningLines.Count -gt 0) {
+                $msgText += "`r`nAvisos: $($warningLines.Count) (normal para bancos existentes)"
+            }
             
             [System.Windows.Forms.MessageBox]::Show(
-                "Restore concluído com sucesso!`r`n`r`nBanco: $DatabaseName",
+                $msgText,
                 "Restore Concluído",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
-            return $true
         }
         else {
-            Write-Log "========================================" -Level Warning
-            Write-Log "✗ pg_restore retornou código: $($process.ExitCode)" -Level Warning
-            Write-Log "========================================" -Level Warning
+            $msgText = "$resultMessage`r`n`r`nErros encontrados: $($errorLines.Count)`r`n`r`nVerifique o log para detalhes completos."
             
             [System.Windows.Forms.MessageBox]::Show(
-                "Restore finalizado com avisos.`r`n`r`nCódigo: $($process.ExitCode)`r`n`r`nVerifique o log para detalhes.",
-                "Restore com Avisos",
+                $msgText,
+                "Restore com Erros",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
+                [System.Windows.Forms.MessageBoxIcon]::Error
             )
-            return $true  # Considerar sucesso com avisos
         }
+        
+        return $isSuccess
     }
     catch {
         Write-Log "✗ Erro no restore CUSTOM: $($_.Exception.Message)" -Level Error
@@ -979,7 +1080,7 @@ function Invoke-CustomRestore {
 function Invoke-PlainRestore {
     <#
     .SYNOPSIS
-        Restaura backup no formato PLAIN (.sql)
+        Restaura backup no formato PLAIN (.sql) COM TRATAMENTO COMPLETO DE ERROS
     #>
     [CmdletBinding()]
     param(
@@ -1015,42 +1116,133 @@ function Invoke-PlainRestore {
         $null = $process.Start()
         $process.StandardInput.Close()
         
-        # Ler saída em tempo real
+        # ✅ CORREÇÃO: Capturar erros críticos vs avisos (mesmo para PLAIN)
+        $errorLines = @()
+        $warningLines = @()
+        $infoLines = @()
+        
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                Write-Log $line -Level Info
+                # Classificar por tipo
+                if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
+                    # Erros críticos
+                    $errorLines += $line
+                    Write-Log $line -Level Error
+                }
+                elseif ($line -match "WARNING|ERROR.*already exists|NOTICE") {
+                    # Avisos (não críticos)
+                    $warningLines += $line
+                    Write-Log $line -Level Warning
+                }
+                else {
+                    # Informação
+                    $infoLines += $line
+                    Write-Log $line -Level Info
+                }
             }
         }
         
         $process.WaitForExit()
         
+        # ✅ CORREÇÃO: Análise inteligente do exit code
+        Write-Log "========================================" -Level Info
+        Write-Log "Código de saída psql: $($process.ExitCode)" -Level Info
+        Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
+        Write-Log "Avisos: $($warningLines.Count)" -Level Info
+        Write-Log "========================================" -Level Info
+        
+        # Determinar sucesso
+        $isSuccess = $false
+        $resultMessage = ""
+        
         if ($process.ExitCode -eq 0) {
-            Write-Log "========================================" -Level Success
-            Write-Log "✓ Restore concluído!" -Level Success
-            Write-Log "========================================" -Level Success
+            $isSuccess = $true
+            $resultMessage = "✓ Restore concluído com sucesso!"
+            Write-Log $resultMessage -Level Success
+        }
+        elseif ($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) {
+            # Para psql, exit codes 1-2 podem ser avisos
+            if ($errorLines.Count -eq 0) {
+                $isSuccess = $true
+                $resultMessage = "✓ Restore concluído com avisos"
+                Write-Log $resultMessage -Level Success
+            }
+            else {
+                $isSuccess = $false
+                $resultMessage = "✗ Restore falhou com erros críticos"
+                Write-Log $resultMessage -Level Error
+            }
+        }
+        else {
+            $isSuccess = $false
+            $resultMessage = "✗ Restore falhou (código $($process.ExitCode))"
+            Write-Log $resultMessage -Level Error
+        }
+        
+        # ✅ CORREÇÃO: Relatório detalhado de erros (igual ao CUSTOM)
+        if ($errorLines.Count -gt 0) {
+            Write-Log "========================================" -Level Error
+            Write-Log "ERROS CRÍTICOS ENCONTRADOS:" -Level Error
+            Write-Log "========================================" -Level Error
+            foreach ($err in $errorLines) {
+                Write-Log "  $err" -Level Error
+            }
+            Write-Log "========================================" -Level Error
+            
+            # Análise de erros comuns
+            $errorAnalysis = @()
+            foreach ($err in $errorLines) {
+                if ($err -match "authentication failed") {
+                    $errorAnalysis += "• Senha incorreta ou usuário sem permissão"
+                }
+                elseif ($err -match "does not exist") {
+                    $errorAnalysis += "• Banco de dados ou objeto não existe"
+                }
+                elseif ($err -match "permission denied") {
+                    $errorAnalysis += "• Usuário não tem permissões necessárias"
+                }
+                elseif ($err -match "syntax error") {
+                    $errorAnalysis += "• Erro de sintaxe SQL (possível incompatibilidade de versão)"
+                }
+            }
+            
+            if ($errorAnalysis.Count -gt 0) {
+                Write-Log "POSSÍVEIS CAUSAS:" -Level Error
+                foreach ($analysis in $errorAnalysis) {
+                    Write-Log $analysis -Level Error
+                }
+            }
+        }
+        
+        Write-Log "========================================" -Level Info
+        
+        # Mensagem final ao usuário
+        if ($isSuccess) {
+            $msgText = "$resultMessage`r`n`r`nBanco: $DatabaseName`r`n"
+            if ($warningLines.Count -gt 0) {
+                $msgText += "`r`nAvisos: $($warningLines.Count)"
+            }
             
             [System.Windows.Forms.MessageBox]::Show(
-                "Restore concluído com sucesso!`r`n`r`nBanco: $DatabaseName",
+                $msgText,
                 "Restore Concluído",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Information
             )
-            return $true
         }
         else {
-            Write-Log "========================================" -Level Warning
-            Write-Log "✗ psql retornou código: $($process.ExitCode)" -Level Warning
-            Write-Log "========================================" -Level Warning
+            $msgText = "$resultMessage`r`n`r`nErros encontrados: $($errorLines.Count)`r`n`r`nVerifique o log para detalhes completos."
             
             [System.Windows.Forms.MessageBox]::Show(
-                "Restore finalizado com avisos.`r`n`r`nCódigo: $($process.ExitCode)`r`n`r`nVerifique o log para detalhes.",
-                "Restore com Avisos",
+                $msgText,
+                "Restore com Erros",
                 [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
+                [System.Windows.Forms.MessageBoxIcon]::Error
             )
-            return $true
         }
+        
+        return $isSuccess
     }
     catch {
         Write-Log "✗ Erro no restore SQL: $($_.Exception.Message)" -Level Error
@@ -1244,6 +1436,7 @@ function Initialize-MainForm {
     $script:UI.Form.Add_Load({
         Write-Log "========================================" -Level Info
         Write-Log "PostgreSQL Backup & Restore Pro v$($script:Config.Version)" -Level Info
+        Write-Log "✅ MELHORIAS: Backup sem owner/ACL + Restore com análise de erros" -Level Info
         Write-Log "========================================" -Level Info
         Write-Log "Iniciando aplicação..." -Level Info
         
@@ -1742,4 +1935,3 @@ finally {
     }
 }
 #endregion
-
