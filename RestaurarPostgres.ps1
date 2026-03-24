@@ -1597,7 +1597,7 @@ function Initialize-BackupTab {
     $script:UI.cboHostBkp.Location = New-Object System.Drawing.Point(75, 23)
     $script:UI.cboHostBkp.Size = New-Object System.Drawing.Size(230, 21)
     $script:UI.cboHostBkp.DropDownStyle = "DropDown"
-    $script:UI.cboHostBkp.Items.AddRange(@($script:PredefinedHosts.Keys))
+    $script:UI.cboHostBkp.Items.AddRange(@($script:PredefinedHosts.Keys | Sort-Object))
     $script:UI.cboHostBkp.Add_SelectedIndexChanged({
         $selectedHost = $script:UI.cboHostBkp.SelectedItem
         if ($script:PredefinedHosts.ContainsKey($selectedHost)) {
