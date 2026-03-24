@@ -38,6 +38,16 @@ $script:PredefinedHosts = @{
         User = "postgres"
         Pass = ""
     }
+    "cloud3.sistemasnano.com.br" = @{
+        Port = "5432"
+        User = "postgres"
+        Pass = ""
+    }
+    "cloud4.sistemasnano.com.br" = @{
+        Port = "5432"
+        User = "postgres"
+        Pass = ""
+    }
 }
 
 # UI Controls
