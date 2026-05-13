@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param()
 
-#region Assembly Loading
 try {
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
@@ -10,16 +9,14 @@ catch {
     Write-Error "Erro ao carregar assemblies do Windows Forms: $_"
     exit 1
 }
-#endregion
 
-#region Global Variables
 $script:Config = @{
     pgBinPath = $null
     pgRestorePath = $null
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "3.1"  # Bugfix: already exists tratado corretamente
+    Version = "3.1" 
 }
 
 $script:PredefinedHosts = @{
@@ -28,29 +25,13 @@ $script:PredefinedHosts = @{
         User = "postgres"
         Pass = ""
     }
-    "cloud1.sistemasnano.com.br" = @{
-        Port = "5432"
-        User = "postgres"
-        Pass = ""
-    }
-    "cloud2.sistemasnano.com.br" = @{
-        Port = "5432"
-        User = "postgres"
-        Pass = ""
-    }
-    "cloud3.sistemasnano.com.br" = @{
-        Port = "5432"
-        User = "postgres"
-        Pass = ""
-    }
-    "cloud4.sistemasnano.com.br" = @{
-        Port = "5432"
+    "nano1.nanocloud.app.br" = @{
+        Port = "6432"
         User = "postgres"
         Pass = ""
     }
 }
 
-# UI Controls
 $script:UI = @{
     Form = $null
     rtbLog = $null
@@ -69,9 +50,7 @@ $script:UI = @{
     btnTestConnection = $null
     btnRestore = $null
 }
-#endregion
 
-#region Logging Functions
 function Write-Log {
     [CmdletBinding()]
     param(
@@ -123,9 +102,7 @@ function Clear-Log {
         $script:UI.rtbLog.Clear()
     }
 }
-#endregion
 
-#region PostgreSQL Binary Detection
 function Find-PostgreSQLBinaries {
     [CmdletBinding()]
     param()
@@ -133,8 +110,7 @@ function Find-PostgreSQLBinaries {
     Write-Log "Procurando binários do PostgreSQL..." -Level Info
     
     $searchPaths = @()
-    
-    # Registro do Windows
+
     try {
         $regPath = "HKLM:\SOFTWARE\PostgreSQL\Installations"
         if (Test-Path $regPath) {
@@ -152,8 +128,7 @@ function Find-PostgreSQLBinaries {
         }
     }
     catch { }
-    
-    # Program Files
+
     $programFiles = ${env:ProgramFiles}
     $pgFolder = Join-Path $programFiles "PostgreSQL"
     if (Test-Path $pgFolder) {
@@ -164,8 +139,7 @@ function Find-PostgreSQLBinaries {
             }
         }
     }
-    
-    # Program Files (x86)
+
     if (${env:ProgramFiles(x86)}) {
         $pgFolderX86 = Join-Path ${env:ProgramFiles(x86)} "PostgreSQL"
         if (Test-Path $pgFolderX86) {
@@ -177,8 +151,7 @@ function Find-PostgreSQLBinaries {
             }
         }
     }
-    
-    # pgAdmin
+
     $localAppData = $env:LOCALAPPDATA
     $pgAdminPaths = @(
         (Join-Path $localAppData "Programs\pgAdmin 4\runtime"),
@@ -194,7 +167,6 @@ function Find-PostgreSQLBinaries {
         }
     }
     
-    # PATH
     $pathEnv = $env:PATH -split ';'
     foreach ($path in $pathEnv) {
         if ($path -match 'postgres' -and (Test-Path $path)) {
@@ -203,8 +175,7 @@ function Find-PostgreSQLBinaries {
     }
     
     $searchPaths = $searchPaths | Select-Object -Unique
-    
-    # Verificar binários
+
     $requiredBinaries = @('pg_restore.exe', 'psql.exe', 'pg_dump.exe')
     
     foreach ($binPath in $searchPaths) {
@@ -258,9 +229,7 @@ function Find-PostgreSQLBinaries {
     
     return $false
 }
-#endregion
 
-#region Connection Functions
 function Test-PostgreSQLConnection {
     [CmdletBinding()]
     param(
