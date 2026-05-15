@@ -1261,7 +1261,8 @@ function Invoke-PlainRestore {
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:Config.psqlPath
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -f `"$BackupFile`""
+        # CORREÇÃO: adicionado -v ON_ERROR_STOP=0 e --no-password
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v ON_ERROR_STOP=0 --no-password -f `"$BackupFile`""
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -1269,14 +1270,16 @@ function Invoke-PlainRestore {
         $psi.CreateNoWindow = $true
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
         
-        Write-Log "Comando: psql -h $HostName -p $Port -U $User -d $DatabaseName -f `"$BackupFile`"" -Level Info
+        Write-Log "Comando: psql -h $HostName -p $Port -U $User -d $DatabaseName -v ON_ERROR_STOP=0 --no-password" -Level Info
         
         $process = New-Object System.Diagnostics.Process
         $process.StartInfo = $psi
         
         $null = $process.Start()
-        $process.StandardInput.Close()
         
+        # CORREÇÃO: fechar stdin imediatamente para evitar travamento no \restrict
+        $process.StandardInput.Close()
+
         $errorLines = @()
         $warningLines = @()
         
@@ -1296,8 +1299,13 @@ function Invoke-PlainRestore {
                 }
             }
         }
-        
-        $process.WaitForExit()
+
+        # CORREÇÃO: timeout de 30 minutos para arquivos grandes
+        if (-not $process.WaitForExit(1800000)) {
+            $process.Kill()
+            Write-Log "✗ Timeout: processo excedeu 30 minutos" -Level Error
+            return $false
+        }
         
         $isSuccess = ($process.ExitCode -eq 0) -or (($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) -and $errorLines.Count -eq 0)
         
