@@ -26,8 +26,8 @@ $script:PredefinedHosts = @{
         Pass = ""
     }
     "nano1.nanocloud.app.br" = @{
-        Port = "6432"
-        User = "webadmin"
+        Port = "5432"
+        User = "postgres"
         Pass = ""
     }
 }
