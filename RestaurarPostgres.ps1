@@ -55,8 +55,7 @@ function Write-Log {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Message,
-        
+        [string]$Message,        
         [Parameter(Mandatory = $false)]
         [ValidateSet('Info', 'Success', 'Warning', 'Error')]
         [string]$Level = 'Info'
@@ -516,7 +515,7 @@ function Remove-DatabaseIfExists {
 SELECT pg_terminate_backend(pg_stat_activity.pid)
 FROM pg_stat_activity
 WHERE pg_stat_activity.datname = '$DatabaseName'
-  AND pid <> pg_backend_pid();
+    AND pid <> pg_backend_pid();
 "@
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -1217,24 +1216,13 @@ function Invoke-CustomRestore {
             )
         }
         else {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Restore falhou!`r`n`r`nErros: $($errorLines.Count)`r`n`r`nVerifique o log.",
-                "Erro no Restore",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
+            [System.Windows.Forms.MessageBox]::Show("Restore falhou!`r`n`r`nErros: $($errorLines.Count)`r`n`r`nVerifique o log.", "Erro no Restore", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         }
-        
         return $isSuccess
     }
     catch {
         Write-Log "✗ Erro no restore: $($_.Exception.Message)" -Level Error
-        [System.Windows.Forms.MessageBox]::Show(
-            "Erro: $($_.Exception.Message)",
-            "Erro",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
+        [System.Windows.Forms.MessageBox]::Show("Erro: $($_.Exception.Message)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return $false
     }
     finally {
@@ -1663,7 +1651,7 @@ function Initialize-BackupTab {
                 $script:UI.cboDBBkp.Items.Clear()
                 if ($databases.Count -gt 0) {
                     $script:UI.cboDBBkp.Items.AddRange($databases)
-                    $script:UI.cboDBBkp.SelectedIndex = 0
+                    $script:UI.cboDBBkp.SelectedIndex = -1
                 }
             }
         }
@@ -1691,7 +1679,9 @@ function Initialize-BackupTab {
     $script:UI.cboDBBkp = New-Object System.Windows.Forms.ComboBox
     $script:UI.cboDBBkp.Location = New-Object System.Drawing.Point(75, 26)
     $script:UI.cboDBBkp.Size = New-Object System.Drawing.Size(330, 21)
-    $script:UI.cboDBBkp.DropDownStyle = "DropDownList"
+    $script:UI.cboDBBkp.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+    $script:UI.cboDBBkp.AutoCompleteMode = [System.Windows.Forms.AutoCompleteMode]::SuggestAppend
+    $script:UI.cboDBBkp.AutoCompleteSource = [System.Windows.Forms.AutoCompleteSource]::ListItems
     $grpDatabase.Controls.Add($script:UI.cboDBBkp)
     
     # Botão Backup
@@ -1705,12 +1695,7 @@ function Initialize-BackupTab {
     $script:UI.btnBackup.FlatStyle = "Flat"
     $script:UI.btnBackup.Add_Click({
         if ($script:UI.cboDBBkp.SelectedIndex -eq -1) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Selecione um banco de dados!",
-                "Validação",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
+            [System.Windows.Forms.MessageBox]::Show("Selecione um banco de dados!", "Validação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
         
@@ -1769,6 +1754,7 @@ function Initialize-RestoreTab {
     $grpConnection.Controls.Add($lblHostRestore)
     
     $script:UI.txtHostRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtHostRestore.Text = "Localhost"
     $script:UI.txtHostRestore.Location = New-Object System.Drawing.Point(75, 23)
     $script:UI.txtHostRestore.Size = New-Object System.Drawing.Size(230, 20)
     $grpConnection.Controls.Add($script:UI.txtHostRestore)
@@ -1799,6 +1785,7 @@ function Initialize-RestoreTab {
     $grpConnection.Controls.Add($lblUserRestore)
     
     $script:UI.txtUserRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtUserRestore.Text = "postgres"
     $script:UI.txtUserRestore.Location = New-Object System.Drawing.Point(75, 53)
     $script:UI.txtUserRestore.Size = New-Object System.Drawing.Size(230, 20)
     $grpConnection.Controls.Add($script:UI.txtUserRestore)
@@ -1813,6 +1800,7 @@ function Initialize-RestoreTab {
     $grpConnection.Controls.Add($lblPassRestore)
     
     $script:UI.txtPassRestore = New-Object System.Windows.Forms.TextBox
+    $script:UI.txtPassRestore.Text = "ed3223"
     $script:UI.txtPassRestore.Location = New-Object System.Drawing.Point(375, 53)
     $script:UI.txtPassRestore.Size = New-Object System.Drawing.Size(135, 20)
     $script:UI.txtPassRestore.UseSystemPasswordChar = $true
@@ -1903,22 +1891,12 @@ function Initialize-RestoreTab {
     $script:UI.btnRestore.FlatStyle = "Flat"
     $script:UI.btnRestore.Add_Click({
         if ([string]::IsNullOrWhiteSpace($script:UI.txtFileRestore.Text)) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Selecione um arquivo de backup!",
-                "Validação",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
+            [System.Windows.Forms.MessageBox]::Show("Selecione um arquivo de backup!", "Validação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
         
         if (-not (Test-Path $script:UI.txtFileRestore.Text)) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Arquivo não encontrado!`r`n`r`n$($script:UI.txtFileRestore.Text)",
-                "Erro",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
+            [System.Windows.Forms.MessageBox]::Show("Arquivo não encontrado!`r`n`r`n$($script:UI.txtFileRestore.Text)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
             return
         }
         
@@ -1952,22 +1930,13 @@ function Initialize-RestoreTab {
 try {
     Write-Verbose "Inicializando aplicação..."
     Initialize-MainForm
-    
     Write-Verbose "Exibindo formulário..."
     [void]$script:UI.Form.ShowDialog()
-    
     Write-Verbose "Aplicação encerrada"
 }
 catch {
     $errorMsg = "Erro fatal na aplicação: $($_.Exception.Message)`r`n`r`n$($_.ScriptStackTrace)"
-    
-    [System.Windows.Forms.MessageBox]::Show(
-        $errorMsg,
-        "Erro Fatal",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-    )
-    
+    [System.Windows.Forms.MessageBox]::Show($errorMsg, "Erro Fatal", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     Write-Error $errorMsg
     exit 1
 }
