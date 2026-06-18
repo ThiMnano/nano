@@ -32,7 +32,7 @@ $script:PredefinedHosts = @{
     }
 }
 try {
-    $iconFile = Join-Path $env:TEMP "RestaurarPostgres.png"
+    $iconFile = Join-Path $env:TEMP "RestaurarPostgresV3.png"
     if(-not (Test-Path $iconFile)){
         Invoke-WebRequest `
             -Uri "https://raw.githubusercontent.com/ThiMnano/nano/refs/heads/main/RestaurarPostgres.png" `
