@@ -16,7 +16,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "3.1" 
+    Version = "3.2" 
 }
 
 $script:PredefinedHosts = @{
@@ -31,7 +31,19 @@ $script:PredefinedHosts = @{
         Pass = ""
     }
 }
+try {
+    $iconFile = Join-Path $env:TEMP "RestaurarPostgres.png"
+    if(-not (Test-Path $iconFile)){
+        Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/ThiMnano/nano/refs/heads/main/RestaurarPostgres.png" `
+            -OutFile $iconFile
+    }
+    $bmp = New-Object System.Drawing.Bitmap($iconFile)
+    $form.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
 
+}
+catch {
+}
 $script:UI = @{
     Form = $null
     rtbLog = $null
@@ -49,6 +61,9 @@ $script:UI = @{
     txtFileRestore = $null
     btnTestConnection = $null
     btnRestore = $null
+    clbDropDatabases = $null
+    btnLoadDatabases = $null
+    btnDropDatabases = $null
 }
 
 function Write-Log {
@@ -1427,7 +1442,7 @@ function Initialize-MainForm {
     $script:UI.Form.StartPosition = "CenterScreen"
     $script:UI.Form.FormBorderStyle = "FixedDialog"
     $script:UI.Form.MaximizeBox = $false
-    $script:UI.Form.Icon = [System.Drawing.SystemIcons]::Application
+    $script:UI.Form.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
     
     # Panel superior
     $panelInfo = New-Object System.Windows.Forms.Panel
@@ -1462,6 +1477,7 @@ function Initialize-MainForm {
     
     Initialize-BackupTab -TabControl $tabControl
     Initialize-RestoreTab -TabControl $tabControl
+    Initialize-DropTab -TabControl $tabControl
     
     # Log
     $lblLog = New-Object System.Windows.Forms.Label
@@ -1516,14 +1532,7 @@ function Initialize-MainForm {
     
     $script:UI.Form.Add_FormClosing({
         param($sender, $e)
-        
-        $result = [System.Windows.Forms.MessageBox]::Show(
-            "Deseja realmente sair?",
-            "Confirmar Saída",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Question
-        )
-        
+        $result = [System.Windows.Forms.MessageBox]::Show("Deseja realmente sair?", "Confirmar Saída", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
         if ($result -eq [System.Windows.Forms.DialogResult]::No) {
             $e.Cancel = $true
         }
@@ -1924,6 +1933,100 @@ function Initialize-RestoreTab {
     })
     $tabRestore.Controls.Add($script:UI.btnRestore)
 }
+
+
+function Initialize-DropTab {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Forms.TabControl]$TabControl
+    )
+
+    $tabDrop = New-Object System.Windows.Forms.TabPage
+    $tabDrop.Text = "Excluir Bancos"
+    $tabDrop.UseVisualStyleBackColor = $true
+    $TabControl.Controls.Add($tabDrop)
+
+    $btnLoad = New-Object System.Windows.Forms.Button
+    $btnLoad.Text = "Carregar Bancos"
+    $btnLoad.Location = New-Object System.Drawing.Point(10,10)
+    $btnLoad.Size = New-Object System.Drawing.Size(635,35)
+    $btnLoad.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $btnLoad.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnLoad.ForeColor = [System.Drawing.Color]::White
+    $btnLoad.FlatStyle = "Flat"
+    $tabDrop.Controls.Add($btnLoad)
+
+    $script:UI.clbDropDatabases = New-Object System.Windows.Forms.CheckedListBox
+    $script:UI.clbDropDatabases.Location = New-Object System.Drawing.Point(10,50)
+    $script:UI.clbDropDatabases.Size = New-Object System.Drawing.Size(635,140)
+    $script:UI.clbDropDatabases.CheckOnClick = $true
+    $script:UI.clbDropDatabases.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $script:UI.clbDropDatabases.Font = New-Object System.Drawing.Font("Segoe UI",9)
+    $script:UI.clbDropDatabases.IntegralHeight = $false
+    $tabDrop.Controls.Add($script:UI.clbDropDatabases)
+
+    $btnDrop = New-Object System.Windows.Forms.Button
+    $btnDrop.Text = "EXCLUIR BANCOS SELECIONADOS"
+    $btnDrop.Location = New-Object System.Drawing.Point(10,195)
+    $btnDrop.Size = New-Object System.Drawing.Size(635,30)
+    $btnDrop.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $btnDrop.BackColor = [System.Drawing.Color]::FromArgb(215, 120, 0)
+    $btnDrop.ForeColor = [System.Drawing.Color]::White
+    $btnDrop.FlatStyle = "Flat"
+    $tabDrop.Controls.Add($btnDrop)
+
+    $btnLoad.Add_Click({
+
+        $script:UI.clbDropDatabases.Items.Clear()
+
+        try {
+            $dbs = Get-DatabaseList `
+                -HostName $script:UI.txtHostRestore.Text `
+                -Port $script:UI.txtPortRestore.Text `
+                -User $script:UI.txtUserRestore.Text `
+                -Password $script:UI.txtPassRestore.Text
+
+            foreach($db in $dbs){
+                if($db -notin @("postgres","template0","template1")){
+                    [void]$script:UI.clbDropDatabases.Items.Add($db)
+                }
+            }
+
+            Write-Log "$($script:UI.clbDropDatabases.Items.Count) banco(s) encontrado(s)." -Level Success
+        }
+        catch{
+            Write-Log $_.Exception.Message -Level Error
+        }
+    })
+
+    $btnDrop.Add_Click({
+        if($script:UI.clbDropDatabases.CheckedItems.Count -eq 0){
+            [System.Windows.Forms.MessageBox]::Show("Selecione pelo menos um banco.")
+            return
+        }
+        $resp = [System.Windows.Forms.MessageBox]::Show("Deseja excluir os bancos selecionados?", "Confirmação", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        if($resp -ne [System.Windows.Forms.DialogResult]::Yes){
+            return
+        }
+
+        foreach($db in $script:UI.clbDropDatabases.CheckedItems){
+
+            Write-Log "Removendo banco: $db" -Level Warning
+
+            Remove-DatabaseIfExists `
+                -HostName $script:UI.txtHostRestore.Text `
+                -Port $script:UI.txtPortRestore.Text `
+                -User $script:UI.txtUserRestore.Text `
+                -Password $script:UI.txtPassRestore.Text `
+                -DatabaseName $db
+
+            Write-Log "Banco removido: $db" -Level Success
+        }
+    })
+}
+
+
 #endregion
 
 #region Main Execution
