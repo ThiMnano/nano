@@ -16,7 +16,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "3.3" 
+    Version = "3.2" 
 }
 
 $script:PredefinedHosts = @{
@@ -31,19 +31,7 @@ $script:PredefinedHosts = @{
         Pass = ""
     }
 }
-try {
-    $iconFile = Join-Path $env:TEMP "RestaurarPostgresV3.png"
-    if(-not (Test-Path $iconFile)){
-        Invoke-WebRequest `
-            -Uri "https://raw.githubusercontent.com/ThiMnano/nano/refs/heads/main/RestaurarPostgres.png" `
-            -OutFile $iconFile
-    }
-    $bmp = New-Object System.Drawing.Bitmap($iconFile)
-    $form.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
 
-}
-catch {
-}
 $script:UI = @{
     Form = $null
     rtbLog = $null
@@ -61,9 +49,6 @@ $script:UI = @{
     txtFileRestore = $null
     btnTestConnection = $null
     btnRestore = $null
-    clbDropDatabases = $null
-    btnLoadDatabases = $null
-    btnDropDatabases = $null
 }
 
 function Write-Log {
@@ -94,13 +79,6 @@ function Write-Log {
             default   { [System.Drawing.Color]::LightGray }
         }
         
-        # CORREÇÃO: limitar tamanho do RichTextBox para não crescer indefinidamente
-        # em memória durante operações com muitas linhas de log (ex: pg_restore -v)
-        if ($script:UI.rtbLog.TextLength -gt 300000) {
-            $script:UI.rtbLog.Select(0, 100000)
-            $script:UI.rtbLog.SelectedText = ""
-        }
-        
         $script:UI.rtbLog.SelectionStart = $script:UI.rtbLog.TextLength
         $script:UI.rtbLog.SelectionLength = 0
         $script:UI.rtbLog.SelectionColor = $color
@@ -121,46 +99,6 @@ function Clear-Log {
     
     if ($null -ne $script:UI.rtbLog) {
         $script:UI.rtbLog.Clear()
-    }
-}
-
-function Start-ProcessOutputDrain {
-    <#
-    .SYNOPSIS
-        Drena o StandardOutput de um processo de forma assíncrona, usando o
-        próprio mecanismo de eventos do .NET (OutputDataReceived), SEM criar
-        um processo powershell.exe extra como o Start-Job fazia.
-    .NOTES
-        Necessário apenas para evitar que o pipe de stdout encha e trave o
-        processo filho (pg_dump/pg_restore/psql) quando ninguém está lendo
-        essa saída. O conteúdo é descartado propositalmente.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [System.Diagnostics.Process]$Process
-    )
-
-    $subscription = Register-ObjectEvent -InputObject $Process -EventName OutputDataReceived -Action {
-        # Descarta a linha recebida; só precisamos manter o pipe drenado.
-    }
-    $Process.BeginOutputReadLine()
-    return $subscription
-}
-
-function Stop-ProcessOutputDrain {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $false)]
-        $Subscription
-    )
-
-    if ($null -ne $Subscription) {
-        try {
-            Unregister-Event -SourceIdentifier $Subscription.Name -ErrorAction SilentlyContinue
-            Remove-Job -Name $Subscription.Name -Force -ErrorAction SilentlyContinue
-        }
-        catch { }
     }
 }
 
@@ -814,19 +752,19 @@ function Get-BackupType {
         }
         
         $buffer = New-Object byte[] 5
-        $fs = [System.IO.File]::OpenRead($FilePath)
+		$fs = [System.IO.File]::OpenRead($FilePath)
 
-        try {
-            if ($fs.Read($buffer, 0, 5) -eq 5) {
-                $header = [System.Text.Encoding]::ASCII.GetString($buffer)
-                if ($header -eq "PGDMP") {
-                    return "CUSTOM"
-                }
-            }
-        }
-        finally {
-            $fs.Close()
-        }
+		try {
+		    if ($fs.Read($buffer, 0, 5) -eq 5) {
+		        $header = [System.Text.Encoding]::ASCII.GetString($buffer)
+		        if ($header -eq "PGDMP") {
+		            return "CUSTOM"
+		        }
+		    }
+		}
+		finally {
+		    $fs.Close()
+		}
         return "PLAIN"
     }
     catch {
@@ -863,7 +801,10 @@ function Get-DatabaseNameFromBackup {
         $null = $process.Start()
         $output = $process.StandardOutput.ReadToEnd()
         
-        $process.WaitForExit()
+        if (-not $process.WaitForExit(5000)) {
+            $process.Kill()
+            return ""
+        }
         
         $lines = $output -split "`n"
         foreach ($line in $lines) {
@@ -937,36 +878,16 @@ function Start-DatabaseBackup {
         $process.StartInfo = $psi
         
         $null = $process.Start()
-
-        $outputSubscription = Start-ProcessOutputDrain -Process $process
-
-        # CORREÇÃO: com -v o pg_dump gera uma linha por objeto (podem ser
-        # centenas de milhares num backup de 2GB). Gravar cada linha no
-        # RichTextBox era o que estava consumindo os ~10GB de RAM.
-        # Agora só erros são logados linha a linha; o progresso é resumido
-        # a cada 200 linhas.
-        $progressCount = 0
+        
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                if ($line -match "error|ERROR|FATAL") {
-                    Write-Log $line -Level Error
-                }
-                else {
-                    $progressCount++
-                    if ($progressCount % 200 -eq 0) {
-                        Write-Log "... $progressCount linhas de log do pg_dump (última: $line)" -Level Info
-                    }
-                }
+                Write-Log $line -Level Info
             }
         }
         
         $process.WaitForExit()
         
-        Stop-ProcessOutputDrain -Subscription $outputSubscription
-
-        Write-Log "Total de linhas de log do pg_dump: $progressCount" -Level Info
-
         if ($process.ExitCode -eq 0) {
             Write-Log "========================================" -Level Success
             Write-Log "✓ Backup concluído com sucesso!" -Level Success
@@ -1221,7 +1142,7 @@ function Invoke-CustomRestore {
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:Config.pgRestorePath
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v --clean --if-exists --no-owner --no-acl `"$BackupFile`""
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v --no-owner --no-acl `"$BackupFile`""
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -1236,47 +1157,32 @@ function Invoke-CustomRestore {
         
         $null = $process.Start()
         $process.StandardInput.Close()
-
-        $outputSubscription = Start-ProcessOutputDrain -Process $process
-
-        # Uso de List<string> em vez de array (@() += é O(n) a cada item)
-        $errorLines = New-Object System.Collections.Generic.List[string]
-        $warningLines = New-Object System.Collections.Generic.List[string]
-
-        # CORREÇÃO: com -v o pg_restore gera uma linha por objeto restaurado
-        # (podem ser centenas de milhares num backup de 2GB, e ainda mais com
-        # -j 4 rodando em paralelo). Gravar cada uma no RichTextBox era o que
-        # estava consumindo os ~10GB de RAM. Erros e avisos continuam sendo
-        # logados linha a linha; o progresso normal é resumido a cada 200 linhas.
-        $progressCount = 0
-
+        
+        # Capturar erros críticos vs avisos
+        $errorLines = @()
+        $warningLines = @()
+        
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    $errorLines.Add($line)
+                    $errorLines += $line
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists") {
-                    $warningLines.Add($line)
+                    $warningLines += $line
                     Write-Log $line -Level Warning
                 }
                 else {
-                    $progressCount++
-                    if ($progressCount % 200 -eq 0) {
-                        Write-Log "... $progressCount linhas processadas (última: $line)" -Level Info
-                    }
+                    Write-Log $line -Level Info
                 }
             }
         }
         
         $process.WaitForExit()
-
-        Stop-ProcessOutputDrain -Subscription $outputSubscription
         
         Write-Log "========================================" -Level Info
         Write-Log "Código de saída: $($process.ExitCode)" -Level Info
-        Write-Log "Linhas de progresso: $progressCount" -Level Info
         Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
         Write-Log "Avisos: $($warningLines.Count)" -Level Info
         Write-Log "========================================" -Level Info
@@ -1369,32 +1275,22 @@ function Invoke-PlainRestore {
         # CORREÇÃO: fechar stdin imediatamente para evitar travamento no \restrict
         $process.StandardInput.Close()
 
-        # CORREÇÃO: drenar stdout de forma assíncrona (faltava aqui) para evitar
-        # que o pipe encha e o psql trave esperando alguém ler a saída.
-        $outputSubscription = Start-ProcessOutputDrain -Process $process
-
-        $errorLines = New-Object System.Collections.Generic.List[string]
-        $warningLines = New-Object System.Collections.Generic.List[string]
-        $progressCount = 0
+        $errorLines = @()
+        $warningLines = @()
         
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    $errorLines.Add($line)
+                    $errorLines += $line
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists|NOTICE") {
-                    $warningLines.Add($line)
+                    $warningLines += $line
                     Write-Log $line -Level Warning
                 }
                 else {
-                    # CORREÇÃO: throttle do log de progresso (antes era 1 linha
-                    # de log por linha do psql, o que estourava a RAM do RichTextBox)
-                    $progressCount++
-                    if ($progressCount % 200 -eq 0) {
-                        Write-Log "... $progressCount linhas processadas (última: $line)" -Level Info
-                    }
+                    Write-Log $line -Level Info
                 }
             }
         }
@@ -1402,13 +1298,9 @@ function Invoke-PlainRestore {
         # CORREÇÃO: timeout de 30 minutos para arquivos grandes
         if (-not $process.WaitForExit(1800000)) {
             $process.Kill()
-            Stop-ProcessOutputDrain -Subscription $outputSubscription
             Write-Log "✗ Timeout: processo excedeu 30 minutos" -Level Error
             return $false
         }
-
-        Stop-ProcessOutputDrain -Subscription $outputSubscription
-        Write-Log "Linhas de progresso: $progressCount" -Level Info
         
         $isSuccess = ($process.ExitCode -eq 0) -or (($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) -and $errorLines.Count -eq 0)
         
@@ -1542,7 +1434,7 @@ function Initialize-MainForm {
     $script:UI.Form.StartPosition = "CenterScreen"
     $script:UI.Form.FormBorderStyle = "FixedDialog"
     $script:UI.Form.MaximizeBox = $false
-    $script:UI.Form.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+    $script:UI.Form.Icon = [System.Drawing.SystemIcons]::Application
     
     # Panel superior
     $panelInfo = New-Object System.Windows.Forms.Panel
@@ -1577,7 +1469,6 @@ function Initialize-MainForm {
     
     Initialize-BackupTab -TabControl $tabControl
     Initialize-RestoreTab -TabControl $tabControl
-    Initialize-DropTab -TabControl $tabControl
     
     # Log
     $lblLog = New-Object System.Windows.Forms.Label
@@ -1632,7 +1523,14 @@ function Initialize-MainForm {
     
     $script:UI.Form.Add_FormClosing({
         param($sender, $e)
-        $result = [System.Windows.Forms.MessageBox]::Show("Deseja realmente sair?", "Confirmar Saída", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        
+        $result = [System.Windows.Forms.MessageBox]::Show(
+            "Deseja realmente sair?",
+            "Confirmar Saída",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
+        )
+        
         if ($result -eq [System.Windows.Forms.DialogResult]::No) {
             $e.Cancel = $true
         }
@@ -2033,100 +1931,6 @@ function Initialize-RestoreTab {
     })
     $tabRestore.Controls.Add($script:UI.btnRestore)
 }
-
-
-function Initialize-DropTab {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [System.Windows.Forms.TabControl]$TabControl
-    )
-
-    $tabDrop = New-Object System.Windows.Forms.TabPage
-    $tabDrop.Text = "Excluir Bancos"
-    $tabDrop.UseVisualStyleBackColor = $true
-    $TabControl.Controls.Add($tabDrop)
-
-    $btnLoad = New-Object System.Windows.Forms.Button
-    $btnLoad.Text = "Carregar Bancos"
-    $btnLoad.Location = New-Object System.Drawing.Point(10,10)
-    $btnLoad.Size = New-Object System.Drawing.Size(635,35)
-    $btnLoad.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $btnLoad.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
-    $btnLoad.ForeColor = [System.Drawing.Color]::White
-    $btnLoad.FlatStyle = "Flat"
-    $tabDrop.Controls.Add($btnLoad)
-
-    $script:UI.clbDropDatabases = New-Object System.Windows.Forms.CheckedListBox
-    $script:UI.clbDropDatabases.Location = New-Object System.Drawing.Point(10,50)
-    $script:UI.clbDropDatabases.Size = New-Object System.Drawing.Size(635,140)
-    $script:UI.clbDropDatabases.CheckOnClick = $true
-    $script:UI.clbDropDatabases.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-    $script:UI.clbDropDatabases.Font = New-Object System.Drawing.Font("Segoe UI",9)
-    $script:UI.clbDropDatabases.IntegralHeight = $false
-    $tabDrop.Controls.Add($script:UI.clbDropDatabases)
-
-    $btnDrop = New-Object System.Windows.Forms.Button
-    $btnDrop.Text = "EXCLUIR BANCOS SELECIONADOS"
-    $btnDrop.Location = New-Object System.Drawing.Point(10,195)
-    $btnDrop.Size = New-Object System.Drawing.Size(635,30)
-    $btnDrop.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $btnDrop.BackColor = [System.Drawing.Color]::FromArgb(215, 120, 0)
-    $btnDrop.ForeColor = [System.Drawing.Color]::White
-    $btnDrop.FlatStyle = "Flat"
-    $tabDrop.Controls.Add($btnDrop)
-
-    $btnLoad.Add_Click({
-
-        $script:UI.clbDropDatabases.Items.Clear()
-
-        try {
-            $dbs = Get-DatabaseList `
-                -HostName $script:UI.txtHostRestore.Text `
-                -Port $script:UI.txtPortRestore.Text `
-                -User $script:UI.txtUserRestore.Text `
-                -Password $script:UI.txtPassRestore.Text
-
-            foreach($db in $dbs){
-                if($db -notin @("postgres","template0","template1")){
-                    [void]$script:UI.clbDropDatabases.Items.Add($db)
-                }
-            }
-
-            Write-Log "$($script:UI.clbDropDatabases.Items.Count) banco(s) encontrado(s)." -Level Success
-        }
-        catch{
-            Write-Log $_.Exception.Message -Level Error
-        }
-    })
-
-    $btnDrop.Add_Click({
-        if($script:UI.clbDropDatabases.CheckedItems.Count -eq 0){
-            [System.Windows.Forms.MessageBox]::Show("Selecione pelo menos um banco.")
-            return
-        }
-        $resp = [System.Windows.Forms.MessageBox]::Show("Deseja excluir os bancos selecionados?", "Confirmação", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        if($resp -ne [System.Windows.Forms.DialogResult]::Yes){
-            return
-        }
-
-        foreach($db in $script:UI.clbDropDatabases.CheckedItems){
-
-            Write-Log "Removendo banco: $db" -Level Warning
-
-            Remove-DatabaseIfExists `
-                -HostName $script:UI.txtHostRestore.Text `
-                -Port $script:UI.txtPortRestore.Text `
-                -User $script:UI.txtUserRestore.Text `
-                -Password $script:UI.txtPassRestore.Text `
-                -DatabaseName $db
-
-            Write-Log "Banco removido: $db" -Level Success
-        }
-    })
-}
-
-
 #endregion
 
 #region Main Execution
