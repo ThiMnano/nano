@@ -14,7 +14,7 @@ Coleção de scripts para automatizar tarefas do Windows e facilitar o dia a dia
 ## ⚡ Quick
 
 ```powershell
-powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/ThiMnano/nano/main/Quick.ps1 | iex"
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "iwr https://raw.githubusercontent.com/ThiMnano/nano/main/Quick.ps1 | iex"
 ```
 
 ---
@@ -22,7 +22,7 @@ powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr 
 ## 🛠️ Atalhos
 
 ```powershell
-powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/ThiMnano/nano/main/atalhos.ps1 | iex"
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "iwr https://raw.githubusercontent.com/ThiMnano/nano/main/atalhos.ps1 | iex"
 ```
 
 ---
@@ -30,7 +30,7 @@ powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr 
 ## ✨ Atalhos V2
 
 ```powershell
-powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/ThiMnano/nano/main/Atalhos_v2.ps1 | iex"
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "iwr https://raw.githubusercontent.com/ThiMnano/nano/main/Atalhos_v2.ps1 | iex"
 ```
 
 ---
@@ -38,7 +38,7 @@ powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr 
 ## 🐘 Restaurar PostgreSQL
 
 ```powershell
-powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/ThiMnano/nano/main/RestaurarPostgres.ps1 | iex"
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -Command "irm https://raw.githubusercontent.com/ThiMnano/nano/refs/heads/main/RestaurarPostgres.ps1 | iex"
 ```
 
 ---
