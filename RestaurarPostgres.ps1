@@ -766,12 +766,19 @@ function Get-BackupType {
             return "UNKNOWN"
         }
         
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        if ($bytes.Length -ge 5) {
-            $header = [System.Text.Encoding]::ASCII.GetString($bytes[0..4])
-            if ($header -eq "PGDMP") {
-                return "CUSTOM"
+        $buffer = New-Object byte[] 5
+        $fs = [System.IO.File]::OpenRead($FilePath)
+
+        try {
+            if ($fs.Read($buffer, 0, 5) -eq 5) {
+                $header = [System.Text.Encoding]::ASCII.GetString($buffer)
+                if ($header -eq "PGDMP") {
+                    return "CUSTOM"
+                }
             }
+        }
+        finally {
+            $fs.Close()
         }
         return "PLAIN"
     }
@@ -809,16 +816,13 @@ function Get-DatabaseNameFromBackup {
         $null = $process.Start()
         $output = $process.StandardOutput.ReadToEnd()
         
-        if (-not $process.WaitForExit(5000)) {
-            $process.Kill()
-            return ""
-        }
+        $process.WaitForExit()
         
         $lines = $output -split "`n"
         foreach ($line in $lines) {
             if ($line -match ";\s*DATABASE\s+-\s+Name:\s+(\S+)" -or
                 $line -match "CREATE\s+DATABASE\s+(\S+)") {
-                return $matches[1].Trim()
+                return $matches[1].Trim().Trim('"')
             }
         }
     }
@@ -886,7 +890,14 @@ function Start-DatabaseBackup {
         $process.StartInfo = $psi
         
         $null = $process.Start()
-        
+
+        $outputJob = Start-Job -ArgumentList $process -ScriptBlock {
+            param($p)
+            while (-not $p.StandardOutput.EndOfStream) {
+                $null = $p.StandardOutput.ReadLine()
+            }
+        }
+
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
@@ -896,6 +907,9 @@ function Start-DatabaseBackup {
         
         $process.WaitForExit()
         
+        Wait-Job $outputJob | Out-Null
+        Remove-Job $outputJob
+
         if ($process.ExitCode -eq 0) {
             Write-Log "========================================" -Level Success
             Write-Log "✓ Backup concluído com sucesso!" -Level Success
@@ -1150,7 +1164,7 @@ function Invoke-CustomRestore {
         
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $script:Config.pgRestorePath
-        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v --no-owner --no-acl `"$BackupFile`""
+        $psi.Arguments = "-h `"$HostName`" -p $Port -U `"$User`" -d `"$DatabaseName`" -v --clean --if-exists --no-owner --no-acl `"$BackupFile`""
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
@@ -1165,8 +1179,14 @@ function Invoke-CustomRestore {
         
         $null = $process.Start()
         $process.StandardInput.Close()
-        
-        # Capturar erros críticos vs avisos
+
+        $outputJob = Start-Job -ArgumentList $process -ScriptBlock {
+            param($p)
+            while (-not $p.StandardOutput.EndOfStream) {
+                $null = $p.StandardOutput.ReadLine()
+            }
+        }
+
         $errorLines = @()
         $warningLines = @()
         
@@ -1188,6 +1208,9 @@ function Invoke-CustomRestore {
         }
         
         $process.WaitForExit()
+
+        Wait-Job $outputJob | Out-Null
+        Remove-Job $outputJob
         
         Write-Log "========================================" -Level Info
         Write-Log "Código de saída: $($process.ExitCode)" -Level Info
