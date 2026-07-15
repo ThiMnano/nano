@@ -94,6 +94,13 @@ function Write-Log {
             default   { [System.Drawing.Color]::LightGray }
         }
         
+        # CORREÇÃO: limitar tamanho do RichTextBox para não crescer indefinidamente
+        # em memória durante operações com muitas linhas de log (ex: pg_restore -v)
+        if ($script:UI.rtbLog.TextLength -gt 300000) {
+            $script:UI.rtbLog.Select(0, 100000)
+            $script:UI.rtbLog.SelectedText = ""
+        }
+        
         $script:UI.rtbLog.SelectionStart = $script:UI.rtbLog.TextLength
         $script:UI.rtbLog.SelectionLength = 0
         $script:UI.rtbLog.SelectionColor = $color
@@ -114,6 +121,46 @@ function Clear-Log {
     
     if ($null -ne $script:UI.rtbLog) {
         $script:UI.rtbLog.Clear()
+    }
+}
+
+function Start-ProcessOutputDrain {
+    <#
+    .SYNOPSIS
+        Drena o StandardOutput de um processo de forma assíncrona, usando o
+        próprio mecanismo de eventos do .NET (OutputDataReceived), SEM criar
+        um processo powershell.exe extra como o Start-Job fazia.
+    .NOTES
+        Necessário apenas para evitar que o pipe de stdout encha e trave o
+        processo filho (pg_dump/pg_restore/psql) quando ninguém está lendo
+        essa saída. O conteúdo é descartado propositalmente.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process
+    )
+
+    $subscription = Register-ObjectEvent -InputObject $Process -EventName OutputDataReceived -Action {
+        # Descarta a linha recebida; só precisamos manter o pipe drenado.
+    }
+    $Process.BeginOutputReadLine()
+    return $subscription
+}
+
+function Stop-ProcessOutputDrain {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        $Subscription
+    )
+
+    if ($null -ne $Subscription) {
+        try {
+            Unregister-Event -SourceIdentifier $Subscription.Name -ErrorAction SilentlyContinue
+            Remove-Job -Name $Subscription.Name -Force -ErrorAction SilentlyContinue
+        }
+        catch { }
     }
 }
 
@@ -891,24 +938,34 @@ function Start-DatabaseBackup {
         
         $null = $process.Start()
 
-        $outputJob = Start-Job -ArgumentList $process -ScriptBlock {
-            param($p)
-            while (-not $p.StandardOutput.EndOfStream) {
-                $null = $p.StandardOutput.ReadLine()
-            }
-        }
+        $outputSubscription = Start-ProcessOutputDrain -Process $process
 
+        # CORREÇÃO: com -v o pg_dump gera uma linha por objeto (podem ser
+        # centenas de milhares num backup de 2GB). Gravar cada linha no
+        # RichTextBox era o que estava consumindo os ~10GB de RAM.
+        # Agora só erros são logados linha a linha; o progresso é resumido
+        # a cada 200 linhas.
+        $progressCount = 0
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
-                Write-Log $line -Level Info
+                if ($line -match "error|ERROR|FATAL") {
+                    Write-Log $line -Level Error
+                }
+                else {
+                    $progressCount++
+                    if ($progressCount % 200 -eq 0) {
+                        Write-Log "... $progressCount linhas de log do pg_dump (última: $line)" -Level Info
+                    }
+                }
             }
         }
         
         $process.WaitForExit()
         
-        Wait-Job $outputJob | Out-Null
-        Remove-Job $outputJob
+        Stop-ProcessOutputDrain -Subscription $outputSubscription
+
+        Write-Log "Total de linhas de log do pg_dump: $progressCount" -Level Info
 
         if ($process.ExitCode -eq 0) {
             Write-Log "========================================" -Level Success
@@ -1180,40 +1237,46 @@ function Invoke-CustomRestore {
         $null = $process.Start()
         $process.StandardInput.Close()
 
-        $outputJob = Start-Job -ArgumentList $process -ScriptBlock {
-            param($p)
-            while (-not $p.StandardOutput.EndOfStream) {
-                $null = $p.StandardOutput.ReadLine()
-            }
-        }
+        $outputSubscription = Start-ProcessOutputDrain -Process $process
 
-        $errorLines = @()
-        $warningLines = @()
-        
+        # Uso de List<string> em vez de array (@() += é O(n) a cada item)
+        $errorLines = New-Object System.Collections.Generic.List[string]
+        $warningLines = New-Object System.Collections.Generic.List[string]
+
+        # CORREÇÃO: com -v o pg_restore gera uma linha por objeto restaurado
+        # (podem ser centenas de milhares num backup de 2GB, e ainda mais com
+        # -j 4 rodando em paralelo). Gravar cada uma no RichTextBox era o que
+        # estava consumindo os ~10GB de RAM. Erros e avisos continuam sendo
+        # logados linha a linha; o progresso normal é resumido a cada 200 linhas.
+        $progressCount = 0
+
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    $errorLines += $line
+                    $errorLines.Add($line)
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists") {
-                    $warningLines += $line
+                    $warningLines.Add($line)
                     Write-Log $line -Level Warning
                 }
                 else {
-                    Write-Log $line -Level Info
+                    $progressCount++
+                    if ($progressCount % 200 -eq 0) {
+                        Write-Log "... $progressCount linhas processadas (última: $line)" -Level Info
+                    }
                 }
             }
         }
         
         $process.WaitForExit()
 
-        Wait-Job $outputJob | Out-Null
-        Remove-Job $outputJob
+        Stop-ProcessOutputDrain -Subscription $outputSubscription
         
         Write-Log "========================================" -Level Info
         Write-Log "Código de saída: $($process.ExitCode)" -Level Info
+        Write-Log "Linhas de progresso: $progressCount" -Level Info
         Write-Log "Erros críticos: $($errorLines.Count)" -Level Info
         Write-Log "Avisos: $($warningLines.Count)" -Level Info
         Write-Log "========================================" -Level Info
@@ -1306,22 +1369,32 @@ function Invoke-PlainRestore {
         # CORREÇÃO: fechar stdin imediatamente para evitar travamento no \restrict
         $process.StandardInput.Close()
 
-        $errorLines = @()
-        $warningLines = @()
+        # CORREÇÃO: drenar stdout de forma assíncrona (faltava aqui) para evitar
+        # que o pipe encha e o psql trave esperando alguém ler a saída.
+        $outputSubscription = Start-ProcessOutputDrain -Process $process
+
+        $errorLines = New-Object System.Collections.Generic.List[string]
+        $warningLines = New-Object System.Collections.Generic.List[string]
+        $progressCount = 0
         
         while (-not $process.StandardError.EndOfStream) {
             $line = $process.StandardError.ReadLine()
             if (-not [string]::IsNullOrWhiteSpace($line)) {
                 if ($line -match "FATAL|ERROR.*authentication failed|ERROR.*does not exist|ERROR.*permission denied|ERROR.*syntax error") {
-                    $errorLines += $line
+                    $errorLines.Add($line)
                     Write-Log $line -Level Error
                 }
                 elseif ($line -match "WARNING|ERROR.*already exists|NOTICE") {
-                    $warningLines += $line
+                    $warningLines.Add($line)
                     Write-Log $line -Level Warning
                 }
                 else {
-                    Write-Log $line -Level Info
+                    # CORREÇÃO: throttle do log de progresso (antes era 1 linha
+                    # de log por linha do psql, o que estourava a RAM do RichTextBox)
+                    $progressCount++
+                    if ($progressCount % 200 -eq 0) {
+                        Write-Log "... $progressCount linhas processadas (última: $line)" -Level Info
+                    }
                 }
             }
         }
@@ -1329,9 +1402,13 @@ function Invoke-PlainRestore {
         # CORREÇÃO: timeout de 30 minutos para arquivos grandes
         if (-not $process.WaitForExit(1800000)) {
             $process.Kill()
+            Stop-ProcessOutputDrain -Subscription $outputSubscription
             Write-Log "✗ Timeout: processo excedeu 30 minutos" -Level Error
             return $false
         }
+
+        Stop-ProcessOutputDrain -Subscription $outputSubscription
+        Write-Log "Linhas de progresso: $progressCount" -Level Info
         
         $isSuccess = ($process.ExitCode -eq 0) -or (($process.ExitCode -eq 1 -or $process.ExitCode -eq 2) -and $errorLines.Count -eq 0)
         
