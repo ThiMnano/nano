@@ -16,7 +16,7 @@ $script:Config = @{
     psqlPath = $null
     pgDumpPath = $null
     FormTitle = "PostgreSQL Backup & Restore Pro"
-    Version = "3.2" 
+    Version = "3.3" 
 }
 
 $script:PredefinedHosts = @{
